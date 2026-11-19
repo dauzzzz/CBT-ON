@@ -314,10 +314,27 @@
         // ============================================================================
         // KONFIGURASI DEPLOYMENT SUPABASE
         // ============================================================================
-        const IS_PREVIEW = true; // Ubah menjadi true untuk uji coba memori lokal + tombol quick login + data dummy minimal
+        const IS_PREVIEW = false; // Diatur false agar mode preview & data dummy nonaktif dan terhubung 100% ke Supabase
         const SUPABASE_URL = "https://meuwliiaeaqfbmbsbyfc.supabase.co";
         const SUPABASE_ANON_KEY = "sb_publishable_tqxwSgLur6RUemAIrSP8qQ_bkNArq0M";
         // ============================================================================
+
+        function isHostedProductionDomain() {
+            try {
+                const host = String(window.location?.hostname || '').toLowerCase();
+                if (!host) return false;
+                const isLocalDev = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local');
+                const isSandboxedArtifact = host.includes('usercontent.goog') || host.includes('webcontainer') || host.includes('stackblitz') || host.includes('csb.app');
+                return !isLocalDev && !isSandboxedArtifact;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function isEffectivePreviewMode() {
+            if (isHostedProductionDomain()) return false;
+            return Boolean(IS_PREVIEW);
+        }
 
         const APP_VERSION = '5.0.0-SUPABASE';
         const DEFAULT_SCHOOL_LOGO = 'https://placehold.co/100x100/4f46e5/ffffff?text=SDN';
@@ -341,7 +358,7 @@
         let isLoginRequestRunning = false;
         let isModalActionRunning = false;
 
-        // Data dummy minimalis (maksimal 1-2 baris per koleksi) hanya aktif bila IS_PREVIEW === true
+        // Data dummy minimalis (maksimal 1-2 baris per koleksi) hanya aktif bila isEffectivePreviewMode() === true
         const PREVIEW_MINIMAL_DATA = {
             settings: {
                 schoolName: 'SD NEGERI GEDONGBOYOUNTUNG',
@@ -546,12 +563,15 @@
         }
 
         function isSupabaseConfigReady() {
+            const url = String(SUPABASE_URL || '').trim();
+            const key = String(SUPABASE_ANON_KEY || '').trim();
             return Boolean(
-                SUPABASE_URL &&
-                SUPABASE_ANON_KEY &&
-                !SUPABASE_URL.includes('YOUR_PROJECT_REF') &&
-                !SUPABASE_ANON_KEY.includes('YOUR_SUPABASE_ANON_KEY') &&
-                SUPABASE_URL.startsWith('https://')
+                url &&
+                key &&
+                !url.includes('YOUR_PROJECT_REF') &&
+                !key.includes('YOUR_SUPABASE_ANON_KEY') &&
+                url.startsWith('https://') &&
+                key.length > 20
             );
         }
 
@@ -1108,7 +1128,7 @@
             window._lastDbSyncError = '';
 
             if (collectionName === 'appSettings') {
-                if (IS_PREVIEW || !supabase) {
+                if (isEffectivePreviewMode() || !supabase) {
                     appData.settings = { ...appData.settings, ...dataObj };
                     updateBrowserFaviconAndTitle();
                     return true;
@@ -1131,7 +1151,7 @@
             const tableName = COLLECTION_TO_TABLE[collectionName];
             if (!tableName) return false;
 
-            if (IS_PREVIEW || !supabase) {
+            if (isEffectivePreviewMode() || !supabase) {
                 if (isDelete) removeLocalRecord(collectionName, safeDocId);
                 else upsertLocalRecord(collectionName, safeDocId, { ...dataObj, id: safeDocId });
                 return true;
@@ -1163,7 +1183,7 @@
         async function fetchSingleRecordFromDb(collectionName, docId) {
             if (!docId || String(docId).trim() === '') return null;
             const safeDocId = String(docId).trim();
-            if (IS_PREVIEW || !supabase) {
+            if (isEffectivePreviewMode() || !supabase) {
                 const list = appData[collectionName] || [];
                 return list.find(x => String(x._docId || x.id || x.resultId) === safeDocId) || null;
             }
@@ -1186,7 +1206,7 @@
             const tableName = COLLECTION_TO_TABLE[collectionName];
             if (!tableName) return { successCount: 0, failedCount: list.length, successIds: new Set(), errorMessage: 'Tabel tidak ditemukan' };
 
-            if (IS_PREVIEW || !supabase) {
+            if (isEffectivePreviewMode() || !supabase) {
                 const successIds = new Set();
                 list.forEach((entry, idx) => {
                     const id = isDelete ? String(entry) : String(entry._docId || entry.id || `ID-${idx}`);
@@ -1292,11 +1312,28 @@
         }
 
         function setupSupabaseRealtimeSubscriptions() {
-            if (IS_PREVIEW || !supabase) return;
+            if (isEffectivePreviewMode() || !supabase) return;
             if (realtimeChannel) {
                 try { supabase.removeChannel(realtimeChannel); } catch (e) {}
                 realtimeChannel = null;
             }
+
+            // Deteksi apakah WebSocket diizinkan oleh lingkungan browser/iframe (seperti Canvas)
+            const isWebSocketAllowed = (() => {
+                try {
+                    if (typeof window === 'undefined' || typeof window.WebSocket !== 'function') {
+                        return false;
+                    }
+                    // Uji instansiasi WebSocket ke endpoint lokal/dummy atau periksa apakah diblokir sandbox
+                    const probeUrl = SUPABASE_URL.replace(/^https?:\/\//i, 'wss://') + '/realtime/v1/websocket';
+                    const testWs = new window.WebSocket(probeUrl);
+                    try { testWs.close(); } catch (e) {}
+                    return true;
+                } catch (wsErr) {
+                    console.warn('WebSocket diblokir di lingkungan ini (menggunakan sinkronisasi REST & polling otomatis):', wsErr?.message || wsErr);
+                    return false;
+                }
+            })();
 
             const tableToCol = {
                 students: 'students',
@@ -1311,91 +1348,100 @@
                 exam_results: 'examResults'
             };
 
-            realtimeChannel = supabase.channel('cbt-sekolah-realtime-all');
+            if (isWebSocketAllowed) {
+                try {
+                    realtimeChannel = supabase.channel('cbt-sekolah-realtime-all');
 
-            Object.entries(tableToCol).forEach(([tableName, colName]) => {
-                realtimeChannel.on(
-                    'postgres_changes',
-                    { event: '*', schema: 'public', table: tableName },
-                    (payload) => {
-                        const evType = payload.eventType;
-                        if (evType === 'DELETE') {
-                            const oldId = payload.old?.id;
-                            if (oldId) removeLocalRecord(colName, String(oldId));
-                        } else if (payload.new) {
-                            const mapped = mapRowFromDb(colName, payload.new);
-                            upsertLocalRecord(colName, mapped.id, mapped);
-                        }
+                    Object.entries(tableToCol).forEach(([tableName, colName]) => {
+                        realtimeChannel.on(
+                            'postgres_changes',
+                            { event: '*', schema: 'public', table: tableName },
+                            (payload) => {
+                                const evType = payload.eventType;
+                                if (evType === 'DELETE') {
+                                    const oldId = payload.old?.id;
+                                    if (oldId) removeLocalRecord(colName, String(oldId));
+                                } else if (payload.new) {
+                                    const mapped = mapRowFromDb(colName, payload.new);
+                                    upsertLocalRecord(colName, mapped.id, mapped);
+                                }
 
-                        if (colName === 'students' && appData.currentUser && appData.currentUser.role === 'student') {
-                            const myLatestDoc = appData.students.find(s => s.id === appData.currentUser.studentId);
-                            if (!myLatestDoc || myLatestDoc.status !== 'Aktif') {
-                                handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan atau dihapus oleh Administrator.');
-                                return;
+                                if (colName === 'students' && appData.currentUser && appData.currentUser.role === 'student') {
+                                    const myLatestDoc = appData.students.find(s => s.id === appData.currentUser.studentId);
+                                    if (!myLatestDoc || myLatestDoc.status !== 'Aktif') {
+                                        handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan atau dihapus oleh Administrator.');
+                                        return;
+                                    }
+                                    if (
+                                        myLatestDoc.isLoggedIn === false ||
+                                        (myLatestDoc.activeSessionId && myLatestDoc.activeSessionId !== currentDeviceSessionId)
+                                    ) {
+                                        handleForcedStudentLogout('Sesi login akun Anda telah direset oleh Pengawas / Administrator.');
+                                        return;
+                                    }
+                                }
+
+                                if (colName === 'exams' && appData.currentUser && appData.currentUser.role === 'student' && isExamWorkspaceActive && currentActiveExam) {
+                                    const updatedExam = appData.exams.find(x => x.id === currentActiveExam.id);
+                                    if (!updatedExam || !isExamStrictlyActive(updatedExam) || !checkExamScheduleAccess(updatedExam).allowed) {
+                                        window.forceCloseStudentExamByAdmin('Ujian ini baru saja ditutup atau dinonaktifkan oleh Administrator. Seluruh jawaban yang sudah Anda isi tetap tersimpan dengan aman.');
+                                        return;
+                                    }
+                                }
+
+                                if (isExamWorkspaceActive && colName === 'examSessions' && payload.new?.id === currentSessionId) {
+                                    const remoteSess = mapRowFromDb('examSessions', payload.new);
+                                    if (remoteSess.status === 'SUBMITTED') {
+                                        window.stopAllExamTimersAndWatchers();
+                                        window.autoLogoutStudentToInitialLogin('Ujian Telah Selesai', 'Sesi ujian ini telah diselesaikan dan dikirim.', 'info');
+                                        return;
+                                    }
+                                    if (remoteSess.sessionToken && currentSessionToken && remoteSess.sessionToken !== currentSessionToken) {
+                                        window.stopAllExamTimersAndWatchers();
+                                        window.autoLogoutStudentToInitialLogin('Sesi Berpindah ke Perangkat Lain', `Ujian dibuka pada perangkat lain (${remoteSess.deviceInfo || 'Perangkat Baru'}).`, 'error');
+                                        return;
+                                    }
+                                }
+
+                                if (!isInitialRealtimeLoad) {
+                                    window.triggerRealtimeUIRefresh(colName);
+                                }
                             }
-                            if (
-                                myLatestDoc.isLoggedIn === false ||
-                                (myLatestDoc.activeSessionId && myLatestDoc.activeSessionId !== currentDeviceSessionId)
-                            ) {
-                                handleForcedStudentLogout('Sesi login akun Anda telah direset oleh Pengawas / Administrator.');
-                                return;
+                        );
+                    });
+
+                    realtimeChannel.on(
+                        'postgres_changes',
+                        { event: '*', schema: 'public', table: 'app_settings' },
+                        (payload) => {
+                            if (payload.new) {
+                                appData.settings = { ...appData.settings, ...mapSettingsFromDb(payload.new) };
+                                updateBrowserFaviconAndTitle();
+                                if (!isInitialRealtimeLoad) {
+                                    window.triggerRealtimeUIRefresh('appSettings');
+                                }
                             }
                         }
+                    );
 
-                        if (colName === 'exams' && appData.currentUser && appData.currentUser.role === 'student' && isExamWorkspaceActive && currentActiveExam) {
-                            const updatedExam = appData.exams.find(x => x.id === currentActiveExam.id);
-                            if (!updatedExam || !isExamStrictlyActive(updatedExam) || !checkExamScheduleAccess(updatedExam).allowed) {
-                                window.forceCloseStudentExamByAdmin('Ujian ini baru saja ditutup atau dinonaktifkan oleh Administrator. Seluruh jawaban yang sudah Anda isi tetap tersimpan dengan aman.');
-                                return;
-                            }
+                    realtimeChannel.subscribe((status) => {
+                        if (status === 'SUBSCRIBED') {
+                            updateLiveSyncIndicator('idle');
+                        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                            updateLiveSyncIndicator('idle');
                         }
-
-                        if (isExamWorkspaceActive && colName === 'examSessions' && payload.new?.id === currentSessionId) {
-                            const remoteSess = mapRowFromDb('examSessions', payload.new);
-                            if (remoteSess.status === 'SUBMITTED') {
-                                window.stopAllExamTimersAndWatchers();
-                                window.autoLogoutStudentToInitialLogin('Ujian Telah Selesai', 'Sesi ujian ini telah diselesaikan dan dikirim.', 'info');
-                                return;
-                            }
-                            if (remoteSess.sessionToken && currentSessionToken && remoteSess.sessionToken !== currentSessionToken) {
-                                window.stopAllExamTimersAndWatchers();
-                                window.autoLogoutStudentToInitialLogin('Sesi Berpindah ke Perangkat Lain', `Ujian dibuka pada perangkat lain (${remoteSess.deviceInfo || 'Perangkat Baru'}).`, 'error');
-                                return;
-                            }
-                        }
-
-                        if (!isInitialRealtimeLoad) {
-                            window.triggerRealtimeUIRefresh(colName);
-                        }
-                    }
-                );
-            });
-
-            realtimeChannel.on(
-                'postgres_changes',
-                { event: '*', schema: 'public', table: 'app_settings' },
-                (payload) => {
-                    if (payload.new) {
-                        appData.settings = { ...appData.settings, ...mapSettingsFromDb(payload.new) };
-                        updateBrowserFaviconAndTitle();
-                        if (!isInitialRealtimeLoad) {
-                            window.triggerRealtimeUIRefresh('appSettings');
-                        }
-                    }
+                    });
+                } catch (subErr) {
+                    console.warn('Realtime channel fallback aktif:', subErr?.message || subErr);
                 }
-            );
-
-            realtimeChannel.subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    updateLiveSyncIndicator('idle');
-                }
-            });
+            }
 
             setTimeout(() => {
                 isInitialRealtimeLoad = false;
             }, 800);
 
             if (fallbackPollingInterval) clearInterval(fallbackPollingInterval);
+            const pollIntervalMs = isWebSocketAllowed ? 60000 : 10000;
             fallbackPollingInterval = setInterval(async () => {
                 if (!supabase || document.hidden || isBulkOperationInProgress || isModalActionRunning) return;
                 try {
@@ -1407,12 +1453,15 @@
                             appData[cName] = data.map(r => mapRowFromDb(cName, r));
                         }
                     }));
+                    if (!isWebSocketAllowed) {
+                        window.triggerRealtimeUIRefresh('polling');
+                    }
                 } catch (e) {}
-            }, 60000);
+            }, pollIntervalMs);
         }
 
         async function initAppEnvironment() {
-            if (IS_PREVIEW) {
+            if (isEffectivePreviewMode()) {
                 appData.settings = { ...appData.settings, ...PREVIEW_MINIMAL_DATA.settings };
                 appData.classes = sanitizePlainData(PREVIEW_MINIMAL_DATA.classes);
                 appData.subjects = sanitizePlainData(PREVIEW_MINIMAL_DATA.subjects);
@@ -1755,7 +1804,7 @@
                     badge.innerHTML = `<i class="fa-solid fa-wifi text-[10px]"></i> <span>Mode Rekoneksi...</span>`;
                 } else {
                     badge.className = 'live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[11px] font-bold flex items-center gap-1.5 transition-all';
-                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview Lokal' : 'Supabase Live'}</span>`;
+                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${isEffectivePreviewMode() ? 'Preview Lokal' : 'Supabase Live'}</span>`;
                 }
             });
 
@@ -2152,7 +2201,7 @@
         // HALAMAN LOGIN HYBRID (ADMIN VIA SUPABASE AUTH + SISWA VIA TABEL DATABASE)
         // ============================================================================
         window.quickPreviewLogin = async function(roleType) {
-            if (!IS_PREVIEW) return;
+            if (!isEffectivePreviewMode()) return;
             if (roleType === 'admin') {
                 appData.currentUser = {
                     role: 'admin',
@@ -2204,20 +2253,6 @@
                    </div>`
                 : `<div class="mt-6 p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-indigo-200">Belum ada ujian berstatus Aktif saat ini.</div>`;
 
-            const previewBadgeHtml = IS_PREVIEW
-                ? `<div class="mb-4 p-3 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs space-y-2">
-                    <div class="flex items-center justify-between font-extrabold">
-                        <span><i class="fa-solid fa-flask text-amber-600 mr-1"></i> Mode Preview Aktif</span>
-                        <span class="px-2 py-0.5 rounded-full bg-amber-200/80 text-[10px]">Memori Lokal</span>
-                    </div>
-                    <div class="grid grid-cols-3 gap-1.5 pt-1">
-                        <button type="button" onclick="window.quickPreviewLogin('student')" class="py-1.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-[11px] cursor-pointer">Login Siswa</button>
-                        <button type="button" onclick="window.quickPreviewLogin('editor')" class="py-1.5 px-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-[11px] cursor-pointer">Login Editor</button>
-                        <button type="button" onclick="window.quickPreviewLogin('admin')" class="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-[11px] cursor-pointer">Login Admin</button>
-                    </div>
-                   </div>`
-                : '';
-
             const container = document.getElementById('appContainer');
             container.innerHTML = `
                 <div class="flex-1 flex flex-col lg:flex-row h-full bg-gradient-to-br from-indigo-900 via-blue-900 to-purple-900 overflow-y-auto">
@@ -2240,7 +2275,7 @@
                             ${activeExamBanner}
                         </div>
                         <div class="mt-8 pt-4 border-t border-indigo-800/60 flex flex-wrap items-center justify-between gap-2 text-xs text-indigo-300">
-                            <div><i class="fa-solid fa-database text-cyan-400 mr-1"></i> ${IS_PREVIEW ? 'Mode Uji Coba Lokal (IS_PREVIEW = true)' : 'Terhubung ke Supabase PostgreSQL & Auth'}</div>
+                            <div><i class="fa-solid fa-database text-cyan-400 mr-1"></i> Terhubung ke Supabase PostgreSQL &amp; Auth</div>
                             <div>Versi ${APP_VERSION}</div>
                         </div>
                     </div>
@@ -2251,8 +2286,6 @@
                                 <h3 class="text-2xl font-extrabold text-slate-900">Masuk Aplikasi</h3>
                                 <p class="text-slate-500 text-xs mt-1">Siswa via Tabel Database • Admin via Supabase Auth</p>
                             </div>
-
-                            ${previewBadgeHtml}
 
                             <div class="flex bg-slate-100 p-1.5 rounded-2xl mb-6">
                                 <button type="button" onclick="window.switchLoginTab('student')" id="tabStudentBtn" class="flex-1 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition shadow-sm bg-indigo-600 text-white cursor-pointer">
@@ -2372,7 +2405,7 @@
             try {
                 let matchedStudent = null;
 
-                if (!IS_PREVIEW && supabase) {
+                if (!isEffectivePreviewMode() && supabase) {
                     const { data: rows, error } = await supabase
                         .from('students')
                         .select('*')
@@ -2480,7 +2513,7 @@
             }
 
             try {
-                if (IS_PREVIEW || !supabase) {
+                if (isEffectivePreviewMode() || !supabase) {
                     showLoginError('Gunakan tombol Quick Login Preview atau aktifkan Supabase (IS_PREVIEW = false).');
                     return;
                 }
@@ -2601,7 +2634,7 @@
             if (wasStudent) {
                 await window.releaseStudentLoginLock(appData.currentUser.studentId);
             }
-            if (wasStaff && !IS_PREVIEW && supabase) {
+            if (wasStaff && !isEffectivePreviewMode() && supabase) {
                 try {
                     await supabase.auth.signOut();
                 } catch (e) {}
@@ -2745,7 +2778,7 @@
                             </div>
                             <div class="flex items-center gap-2 shrink-0">
                                 <div class="live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[10px] sm:text-[11px] font-bold flex items-center gap-1.5 transition-all">
-                                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview' : 'Supabase Live'}</span>
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${isEffectivePreviewMode() ? 'Preview' : 'Supabase Live'}</span>
                                 </div>
                                 <button type="button" onclick="window.logoutApp()" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
                                     <i class="fa-solid fa-right-from-bracket"></i> <span class="hidden sm:inline">Logout</span>
@@ -2891,7 +2924,7 @@
             if (isFetchingStudentsFromCloud) return;
             isFetchingStudentsFromCloud = true;
             try {
-                if (!IS_PREVIEW && supabase) {
+                if (!isEffectivePreviewMode() && supabase) {
                     updateLiveSyncIndicator('syncing', 'Memuat Data Siswa...');
                     const { data, error } = await supabase.from('students').select('*');
                     if (error) throw error;
@@ -3807,7 +3840,7 @@
 
         async function verifyExamEligibilityFromServer(examId, student) {
             let targetExam = appData.exams.find(e => e.id === examId) || null;
-            if (!IS_PREVIEW && supabase && examId) {
+            if (!isEffectivePreviewMode() && supabase && examId) {
                 const cloudExam = await fetchSingleRecordFromDb('exams', examId);
                 if (cloudExam) {
                     targetExam = cloudExam;
@@ -5048,13 +5081,18 @@
         window.addEventListener('hashchange', window.enforceUrlHashRoleGuard);
 
         // ============================================================================
-        // BOOTSTRAP APLIKASI SAAT DIMUAT
+        // BOOTSTRAP APLIKASI SAAT DIMUAT (MENANGANI DOM READY & WINDOW LOAD)
         // ============================================================================
-        window.onload = async function() {
+        let appBootstrapped = false;
+
+        async function bootstrapCbtApplication() {
+            if (appBootstrapped) return;
+            appBootstrapped = true;
+
             registerDynamicServiceWorker();
 
             const restoreStaffIfValid = async () => {
-                if (!IS_PREVIEW && supabase) {
+                if (!isEffectivePreviewMode() && supabase) {
                     const { data: { session } } = await supabase.auth.getSession();
                     if (!session?.user) {
                         window.clearStaffSession();
@@ -5099,7 +5137,12 @@
                     'error'
                 );
             }
-        };
+        }
+
+        window.onload = bootstrapCbtApplication;
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(() => bootstrapCbtApplication(), 0);
+        }
     </script>
 </body>
 </html>
