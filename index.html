@@ -4027,6 +4027,11 @@
                             </div>
 
                             <div>
+                                <label class="block text-[11px] font-bold uppercase text-slate-600 mb-1">URL Gambar Stimulus <span class="text-slate-400 font-normal">(Opsional)</span></label>
+                                <input type="text" id="qFormStimulusImg" oninput="window.updateQuestionLivePreview()" placeholder="https://..." class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono">
+                            </div>
+
+                            <div>
                                 <label class="block text-[11px] font-bold uppercase text-slate-600 mb-1">Teks Pertanyaan Soal *</label>
                                 ${window.buildRichTextToolbarHtml('qFormText')}
                                 <textarea id="qFormText" rows="3" oninput="window.updateQuestionLivePreview()" class="w-full p-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold"></textarea>
@@ -4060,8 +4065,9 @@
                                     <span id="previewNumLabel" class="font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg">Soal Nomor 1</span>
                                     <span id="previewWeightLabel" class="font-bold text-slate-500">Bobot: 10 Poin</span>
                                 </div>
-                                <div id="previewStimulusBox" class="p-3 bg-amber-50/50 rounded-xl border border-amber-200 text-xs text-slate-700 hidden">
+                                <div id="previewStimulusBox" class="p-3 bg-amber-50/50 rounded-xl border border-amber-200 text-xs text-slate-700 hidden space-y-2">
                                     <div id="previewStimulusText"></div>
+                                    <img id="previewStimulusImg" src="" alt="Gambar Stimulus" onerror="this.classList.add('hidden')" class="max-h-44 rounded-lg mx-auto hidden object-contain bg-white border border-slate-200 p-1">
                                 </div>
                                 <div id="previewQuestionText" class="text-sm font-bold text-slate-900 leading-relaxed">(Teks pertanyaan tampil di sini)</div>
                                 <div id="previewOptionsList" class="space-y-2 pt-1"></div>
@@ -4153,6 +4159,7 @@
             const type = document.getElementById('qFormType')?.value || 'pg';
             const weight = document.getElementById('qFormWeight')?.value || '10';
             const stimulus = document.getElementById('qFormStimulus')?.value || '';
+            const stimImgUrl = (document.getElementById('qFormStimulusImg')?.value || '').trim();
             const text = document.getElementById('qFormText')?.value || '';
             const key = document.getElementById('qFormKey')?.value || '-';
             const expl = document.getElementById('qFormExplanation')?.value || '-';
@@ -4168,8 +4175,22 @@
             document.getElementById('previewTypeBadge').innerText = getQuestionTypeBadgeLabel(type);
 
             const stimBox = document.getElementById('previewStimulusBox');
-            if (stimulus.trim()) {
-                document.getElementById('previewStimulusText').innerHTML = window.formatRichQuestionText(stimulus);
+            const stimTextEl = document.getElementById('previewStimulusText');
+            const stimImgEl = document.getElementById('previewStimulusImg');
+            if (stimulus.trim() || stimImgUrl) {
+                if (stimTextEl) {
+                    stimTextEl.innerHTML = stimulus.trim() ? window.formatRichQuestionText(stimulus) : '';
+                    stimTextEl.classList.toggle('hidden', !stimulus.trim());
+                }
+                if (stimImgEl) {
+                    if (stimImgUrl) {
+                        stimImgEl.src = stimImgUrl;
+                        stimImgEl.classList.remove('hidden');
+                    } else {
+                        stimImgEl.src = '';
+                        stimImgEl.classList.add('hidden');
+                    }
+                }
                 stimBox.classList.remove('hidden');
             } else {
                 stimBox.classList.add('hidden');
@@ -4187,6 +4208,10 @@
         window.resetQuestionForm = function() {
             document.getElementById('editQuestionId').value = '';
             document.getElementById('btnDeleteCurrentQuestion')?.classList.add('hidden');
+            const stimEl = document.getElementById('qFormStimulus');
+            if (stimEl) stimEl.value = '';
+            const stimImgEl = document.getElementById('qFormStimulusImg');
+            if (stimImgEl) stimImgEl.value = '';
             document.getElementById('qFormText').value = '';
             document.getElementById('qFormKey').value = '';
             document.getElementById('qFormExplanation').value = '';
@@ -4208,6 +4233,8 @@
             document.getElementById('qFormType').value = q.type || 'pg';
             document.getElementById('qFormWeight').value = q.weight || 10;
             document.getElementById('qFormStimulus').value = q.stimulusText || '';
+            const stimImgEl = document.getElementById('qFormStimulusImg');
+            if (stimImgEl) stimImgEl.value = q.stimulusImage || '';
             document.getElementById('qFormText').value = q.questionText || '';
             window.handleQuestionTypeChange();
             ['qOptA', 'qOptB', 'qOptC', 'qOptD'].forEach((id, i) => {
@@ -4239,6 +4266,7 @@
             const type = document.getElementById('qFormType')?.value || 'pg';
             const weight = Math.max(1, Number(document.getElementById('qFormWeight')?.value) || 10);
             const stimulusText = (document.getElementById('qFormStimulus')?.value || '').trim();
+            const stimulusImage = (document.getElementById('qFormStimulusImg')?.value || '').trim();
             const questionText = (document.getElementById('qFormText')?.value || '').trim();
             const correctAnswerRaw = (document.getElementById('qFormKey')?.value || '').trim();
             const explanation = (document.getElementById('qFormExplanation')?.value || '').trim();
@@ -4276,6 +4304,7 @@
                 ? appData.filters.questionBankId
                 : (appData.questionBanks[0]?.id || 'QB-DEFAULT');
             const bankObj = appData.questionBanks.find(b => b.id === selectedBank);
+            const existingQ = editId ? appData.questions.find(x => String(x.id) === String(editId)) : null;
 
             const docId = editId || ('Q-' + Date.now());
             const qRecord = {
@@ -4283,8 +4312,8 @@
                 bankId: selectedBank,
                 subjectId: bankObj?.subjectId || appData.subjects[0]?.id || '',
                 classLevel: bankObj?.classLevel || '4',
-                orderNum, type, weight, stimulusText, stimulusImage: '',
-                questionText, questionImage: '', options, matchingPairs,
+                orderNum, type, weight, stimulusText, stimulusImage,
+                questionText, questionImage: existingQ?.questionImage || '', options, matchingPairs,
                 correctAnswer, partialScoring: true, explanation, difficulty: 'Sedang'
             };
 
@@ -4307,8 +4336,8 @@
         };
 
         window.downloadQuestionTemplate = function() {
-            const headers = ['No', 'Jenis Soal', 'Bobot', 'Stimulus', 'Pertanyaan', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Kunci', 'Pembahasan'];
-            window.downloadExcelFile('Template_Soal_CBT.xlsx', headers, [[1, 'pg', 10, '', 'Contoh soal?', 'Pilihan A', 'Pilihan B', 'Pilihan C', 'Pilihan D', 'A', 'Pembahasan']]);
+            const headers = ['No', 'Jenis Soal', 'Bobot', 'Stimulus', 'URL Gambar Stimulus (Opsional)', 'Pertanyaan', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Kunci', 'Pembahasan'];
+            window.downloadExcelFile('Template_Soal_CBT.xlsx', headers, [[1, 'pg', 10, '', '', 'Contoh soal?', 'Pilihan A', 'Pilihan B', 'Pilihan C', 'Pilihan D', 'A', 'Pembahasan']]);
         };
 
         window.triggerQuestionExcelImport = function() {
@@ -4323,17 +4352,29 @@
                     const bankId = (appData.filters.questionBankId && appData.filters.questionBankId !== 'ALL')
                         ? appData.filters.questionBankId
                         : (appData.questionBanks[0]?.id || 'QB-DEFAULT');
+                    const headerRow = (rows[0] || []).map(h => String(h ?? '').trim().toLowerCase());
+                    const hasStimImgCol = headerRow.some(h => h.includes('gambar stimulus') || h.includes('url gambar stimulus')) || headerRow.length >= 12;
+                    const hasQImgCol = headerRow.some(h => h.includes('gambar soal')) || headerRow.length >= 13;
                     const newRecords = [];
                     for (let i = 1; i < rows.length; i++) {
                         const cols = rows[i];
-                        const questionText = String(cols[4] ?? '').trim();
+                        const qColIdx = hasStimImgCol ? 5 : 4;
+                        const optStartIdx = hasQImgCol ? 7 : (hasStimImgCol ? 6 : 5);
+                        const questionText = String(cols[qColIdx] ?? '').trim();
                         if (!questionText) continue;
                         const type = String(cols[1] ?? 'pg').trim().toLowerCase() || 'pg';
                         const weight = Number(cols[2]) || 10;
                         const stimulusText = String(cols[3] ?? '').trim();
-                        const options = [String(cols[5] ?? '').trim(), String(cols[6] ?? '').trim(), String(cols[7] ?? '').trim(), String(cols[8] ?? '').trim()];
-                        const keyRaw = String(cols[9] ?? 'A').trim();
-                        const explanation = String(cols[10] ?? '').trim();
+                        const stimulusImage = hasStimImgCol ? String(cols[4] ?? '').trim() : '';
+                        const questionImage = hasQImgCol ? String(cols[6] ?? '').trim() : '';
+                        const options = [
+                            String(cols[optStartIdx] ?? '').trim(),
+                            String(cols[optStartIdx + 1] ?? '').trim(),
+                            String(cols[optStartIdx + 2] ?? '').trim(),
+                            String(cols[optStartIdx + 3] ?? '').trim()
+                        ];
+                        const keyRaw = String(cols[optStartIdx + 4] ?? 'A').trim();
+                        const explanation = String(cols[optStartIdx + 5] ?? '').trim();
                         let finalOptions = options;
                         let finalCorrectAnswer = type === 'pg_complex' ? keyRaw.split(/[,;\s]+/).filter(Boolean) : keyRaw;
                         let finalMatchingPairs = [];
@@ -4353,8 +4394,8 @@
                             subjectId: appData.subjects[0]?.id || '',
                             classLevel: '4',
                             orderNum: appData.questions.length + newRecords.length + 1,
-                            type, weight, stimulusText, stimulusImage: '',
-                            questionText, questionImage: '', options: finalOptions, matchingPairs: finalMatchingPairs,
+                            type, weight, stimulusText, stimulusImage,
+                            questionText, questionImage, options: finalOptions, matchingPairs: finalMatchingPairs,
                             correctAnswer: finalCorrectAnswer,
                             partialScoring: true, explanation, difficulty: 'Sedang'
                         });
@@ -6065,30 +6106,6 @@
                 essayScores,
                 questionScores
             };
-        };
-
-        window.calculateExamSubmissionScore = function(questionsList, studentAnswersMap, existingEssayScores = {}) {
-            let totalScoreObtained = 0, maxPossibleScore = 0, correctCount = 0, wrongCount = 0, emptyCount = 0, hasEssayQuestion = false;
-            const essayScores = {};
-            (questionsList || []).forEach(q => {
-                const w = Math.max(1, Number(q.weight) || 10);
-                maxPossibleScore += w;
-                const ans = studentAnswersMap?.[q.id];
-                const evalRes = window.evaluateQuestionScore(q, ans, existingEssayScores?.[q.id]);
-                if (q.type === 'essay') {
-                    hasEssayQuestion = true;
-                    essayScores[q.id] = evalRes.earnedWeight;
-                }
-                if (evalRes.status === 'EMPTY') emptyCount++;
-                else if (evalRes.status === 'CORRECT' || evalRes.status === 'PARTIAL' || evalRes.status === 'ESSAY') {
-                    totalScoreObtained = safeRoundTwoDecimals(totalScoreObtained + evalRes.earnedWeight);
-                    correctCount++;
-                } else {
-                    wrongCount++;
-                }
-            });
-            const finalScore = maxPossibleScore > 0 ? safeRoundTwoDecimals(Math.min(100, (totalScoreObtained / maxPossibleScore) * 100)) : 0;
-            return { totalScoreObtained, maxPossibleScore, finalScore, correctCount, wrongCount, emptyCount, hasEssayQuestion, essayScores, questionScores: [] };
         };
 
         function getQuestionInstructionText(type) {
