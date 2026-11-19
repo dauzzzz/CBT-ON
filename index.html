@@ -314,7 +314,7 @@
         // ============================================================================
         // KONFIGURASI DEPLOYMENT SUPABASE
         // ============================================================================
-        const IS_PREVIEW = false; // Ubah menjadi true untuk uji coba memori lokal + tombol quick login + data dummy minimal
+        const IS_PREVIEW = false;
         const SUPABASE_URL = "https://meuwliiaeaqfbmbsbyfc.supabase.co";
         const SUPABASE_ANON_KEY = "sb_publishable_tqxwSgLur6RUemAIrSP8qQ_bkNArq0M";
         // ============================================================================
@@ -341,7 +341,6 @@
         let isLoginRequestRunning = false;
         let isModalActionRunning = false;
 
-        // Data dummy minimalis (maksimal 1-2 baris per koleksi) hanya aktif bila IS_PREVIEW === true
         const PREVIEW_MINIMAL_DATA = {
             settings: {
                 schoolName: 'SD NEGERI GEDONGBOYOUNTUNG',
@@ -359,90 +358,11 @@
             subjects: [
                 { id: 'SUB-MAT', subjectCode: 'MAT', subjectName: 'Matematika', gradeLevels: ['4'] }
             ],
-            students: [
-                {
-                    id: 'STD-001',
-                    importOrder: 1,
-                    nisn: '0145678901',
-                    nis: '1001',
-                    fullName: 'Aulia Rahman',
-                    asalSekolah: 'SD NEGERI GEDONGBOYOUNTUNG',
-                    gender: 'P',
-                    classId: 'CLS-4',
-                    className: '4',
-                    academicYear: '2026/2027',
-                    username: '0145678901',
-                    pin: '123456',
-                    passwordHash: 'H$24F970D9',
-                    status: 'Aktif',
-                    isLoggedIn: false,
-                    activeSessionId: '',
-                    lastHeartbeatAt: 0,
-                    deviceInfo: ''
-                }
-            ],
-            teachers: [
-                {
-                    id: 'TCH-001',
-                    nip: '198801012023011001',
-                    fullName: 'Guru Editor Soal',
-                    name: 'Guru Editor Soal',
-                    subjects: ['Matematika'],
-                    username: 'editor@sekolah.sch.id',
-                    email: 'editor@sekolah.sch.id',
-                    password: '123456',
-                    passwordHash: 'H$24F970D9',
-                    role: 'editor_soal',
-                    classes: ['4'],
-                    status: 'Aktif'
-                }
-            ],
-            questionBanks: [
-                { id: 'QB-MAT4', title: 'Bank Soal Matematika Kelas 4', subjectId: 'SUB-MAT', classLevel: '4', semester: 'Ganjil', academicYear: '2026/2027' }
-            ],
-            questions: [
-                {
-                    id: 'Q-001',
-                    bankId: 'QB-MAT4',
-                    subjectId: 'SUB-MAT',
-                    classLevel: '4',
-                    orderNum: 1,
-                    type: 'pg',
-                    weight: 10,
-                    stimulusText: 'Perhatikan operasi hitung bilangan cacah berikut.',
-                    stimulusImage: '',
-                    questionText: 'Hasil dari $25 + 15 \\times 2$ adalah ...',
-                    questionImage: '',
-                    options: ['80', '55', '65', '40'],
-                    matchingPairs: [],
-                    correctAnswer: 'B',
-                    partialScoring: true,
-                    explanation: 'Perkalian dikerjakan terlebih dahulu: $15 \\times 2 = 30$, lalu $25 + 30 = 55$.',
-                    difficulty: 'Mudah'
-                }
-            ],
-            exams: [
-                {
-                    id: 'EX-MAT4',
-                    examName: 'Sumatif Tengah Semester Matematika',
-                    bankId: 'QB-MAT4',
-                    subjectId: 'SUB-MAT',
-                    classId: 'CLS-4',
-                    semester: 'Ganjil',
-                    academicYear: '2026/2027',
-                    startDate: '2020-01-01',
-                    endDate: '2030-12-31',
-                    startTime: '00:00',
-                    endTime: '23:59',
-                    durationMinutes: 60,
-                    token: 'MAT4A',
-                    status: 'Aktif',
-                    questionIds: ['Q-001'],
-                    partialScoring: true,
-                    isPublished: true,
-                    updatedAtMs: Date.now()
-                }
-            ],
+            students: [],
+            teachers: [],
+            questionBanks: [],
+            questions: [],
+            exams: [],
             examParticipants: [],
             examSessions: [],
             examResults: []
@@ -493,7 +413,6 @@
             activityLogs: []
         };
 
-        // Variabel Sesi Ujian, Auto-Save & Kontrol Perangkat
         let examTimerInterval = null;
         let periodicAutoSaveInterval = null;
         let currentActiveExam = null;
@@ -516,7 +435,6 @@
         let selectedStudentIds = new Set();
         let selectedResultIds = new Set();
 
-        // Registrasi Service Worker dinamis via Blob untuk PWA Single-File
         function registerDynamicServiceWorker() {
             if (!('serviceWorker' in navigator)) return;
             const swCode = `
@@ -1300,7 +1218,6 @@
                 realtimeChannel = null;
             }
 
-            // Di lingkungan Canvas, koneksi WebSocket ke wss:// dapat diblokir sehingga melempar error
             const isWebSocketAllowed = (() => {
                 if (typeof window === 'undefined' || typeof window.WebSocket === 'undefined') return false;
                 try {
@@ -3052,6 +2969,475 @@
                 </div>
             `;
         }
+
+        // Hasil & Koreksi
+        function renderResultsContent(container) {
+            cleanupOrphanedResultsAndSessionsInCloud();
+            autoFinalizeExpiredSessions();
+
+            const filterExamId = appData.filters.resultExam || 'ALL';
+            const statusFilter = appData.filters.resultClass || 'ALL';
+            const searchQuery = String(appData.filters.resultSearch || '').trim().toLowerCase();
+
+            const allValidResults = getValidExamResults('ALL');
+            const examFilteredResults = getValidExamResults(filterExamId);
+
+            // Bersihkan ID hasil terpilih yang sudah tidak ada
+            const validResIdSet = new Set(allValidResults.map(r => r.resultId || r.id));
+            Array.from(selectedResultIds).forEach(id => {
+                if (!validResIdSet.has(id)) selectedResultIds.delete(id);
+            });
+
+            // Gabungkan data hasil ujian (Selesai) dengan status siswa Sedang Mengerjakan & Belum Login saat filter status dipilih
+            const activeExamObj = filterExamId !== 'ALL' ? appData.exams.find(e => e.id === filterExamId) : null;
+            const inProgressSessions = (appData.examSessions || []).filter(ss =>
+                ss.status === 'IN_PROGRESS' && (filterExamId === 'ALL' || ss.examId === filterExamId)
+            );
+            const finishedStudentIds = new Set(examFilteredResults.map(r => String(r.studentId)));
+            const inProgressStudentIds = new Set(inProgressSessions.map(ss => String(ss.studentId)));
+
+            const notLoggedInStudents = (appData.students || []).filter(s => {
+                if (finishedStudentIds.has(String(s.id)) || inProgressStudentIds.has(String(s.id))) return false;
+                if (isStudentCurrentlyLoggedIn(s) || s.isLoggedIn) return false;
+                if (activeExamObj && !isExamMatchingStudentClass(activeExamObj, s)) return false;
+                return true;
+            });
+
+            const countDone = examFilteredResults.length;
+            const countInProgress = inProgressSessions.length;
+            const countNotLoggedIn = notLoggedInStudents.length;
+
+            const examOpts = appData.exams.map(ex => {
+                const subName = getSubjectNameById(ex.subjectId);
+                const cnt = allValidResults.filter(r => r.examId === ex.id).length;
+                return `<option value="${escapeHtml(ex.id)}" ${filterExamId === ex.id ? 'selected' : ''}>${escapeHtml(ex.examName)} (${escapeHtml(subName)}) (${cnt} Hasil)</option>`;
+            }).join('');
+
+            let displayRowsHtml = '';
+
+            if (statusFilter === 'IN_PROGRESS') {
+                const filteredSessions = inProgressSessions.filter(ss => {
+                    if (!searchQuery) return true;
+                    const std = appData.students.find(s => String(s.id) === String(ss.studentId) || String(s.nisn) === String(ss.nisn));
+                    const schoolStr = std?.asalSekolah || appData.settings.schoolName || '';
+                    return (
+                        String(ss.nisn || '').toLowerCase().includes(searchQuery) ||
+                        String(ss.studentName || '').toLowerCase().includes(searchQuery) ||
+                        schoolStr.toLowerCase().includes(searchQuery)
+                    );
+                });
+
+                displayRowsHtml = filteredSessions.map((ss, idx) => {
+                    const std = appData.students.find(s => String(s.id) === String(ss.studentId) || String(s.nisn) === String(ss.nisn));
+                    const schoolVal = std?.asalSekolah || '-';
+                    const exObj = appData.exams.find(e => e.id === ss.examId);
+                    const mapelLabel = exObj ? `${exObj.examName} (${getSubjectNameById(exObj.subjectId)})` : (ss.examName || '-');
+                    return `
+                        <tr class="border-b border-slate-100 hover:bg-slate-50">
+                            <td class="px-4 py-3 text-xs text-center text-slate-300">-</td>
+                            <td class="px-4 py-3 text-xs text-slate-500">${idx + 1}</td>
+                            <td class="px-4 py-3 text-xs font-mono">${escapeHtml(ss.nisn || '-')}</td>
+                            <td class="px-4 py-3 text-xs font-bold">${escapeHtml(ss.studentName || '-')}</td>
+                            <td class="px-4 py-3 text-xs font-semibold ${schoolVal === '-' ? 'text-slate-400 italic' : 'text-indigo-700'}">${escapeHtml(schoolVal)}</td>
+                            <td class="px-4 py-3 text-xs">${escapeHtml(ss.className || '-')}</td>
+                            <td class="px-4 py-3 text-xs font-semibold text-slate-700">${escapeHtml(mapelLabel)}</td>
+                            <td class="px-4 py-3 text-xs font-bold text-blue-600">${ss.answeredCount || 0} / ${ss.totalQuestions || '-'} Soal</td>
+                            <td class="px-4 py-3 text-xs"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">Sedang Mengerjakan</span></td>
+                            <td class="px-4 py-3 text-xs whitespace-nowrap">
+                                <button type="button" onclick="window.resetStudentExamSession('${escapeHtml(ss.studentId)}', '${escapeHtml(ss.examId)}')" class="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-bold cursor-pointer"><i class="fa-solid fa-rotate-left mr-1"></i> Reset Sesi</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            } else if (statusFilter === 'NOT_LOGGED_IN') {
+                const filteredNotLogin = notLoggedInStudents.filter(s => {
+                    if (!searchQuery) return true;
+                    const schoolStr = s.asalSekolah || appData.settings.schoolName || '';
+                    return (
+                        String(s.nisn || '').toLowerCase().includes(searchQuery) ||
+                        String(s.fullName || '').toLowerCase().includes(searchQuery) ||
+                        schoolStr.toLowerCase().includes(searchQuery)
+                    );
+                });
+
+                displayRowsHtml = filteredNotLogin.map((s, idx) => {
+                    const schoolVal = s.asalSekolah || '-';
+                    const mapelLabel = activeExamObj
+                        ? `${activeExamObj.examName} (${getSubjectNameById(activeExamObj.subjectId)})`
+                        : 'Semua Paket Ujian';
+                    return `
+                        <tr class="border-b border-slate-100 hover:bg-slate-50">
+                            <td class="px-4 py-3 text-xs text-center text-slate-300">-</td>
+                            <td class="px-4 py-3 text-xs text-slate-500">${idx + 1}</td>
+                            <td class="px-4 py-3 text-xs font-mono">${escapeHtml(s.nisn || '-')}</td>
+                            <td class="px-4 py-3 text-xs font-bold">${escapeHtml(s.fullName || '-')}</td>
+                            <td class="px-4 py-3 text-xs font-semibold ${schoolVal === '-' ? 'text-slate-400 italic' : 'text-indigo-700'}">${escapeHtml(schoolVal)}</td>
+                            <td class="px-4 py-3 text-xs">${escapeHtml(s.className || '-')}</td>
+                            <td class="px-4 py-3 text-xs font-semibold text-slate-700">${escapeHtml(mapelLabel)}</td>
+                            <td class="px-4 py-3 text-xs text-slate-400">-</td>
+                            <td class="px-4 py-3 text-xs"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">Belum Login</span></td>
+                            <td class="px-4 py-3 text-xs text-slate-400">Menunggu Login</td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                const filteredDoneResults = examFilteredResults.filter(r => {
+                    if (!searchQuery) return true;
+                    const stdObj = appData.students.find(s => String(s.id) === String(r.studentId) || String(s.nisn) === String(r.nisn));
+                    const schoolStr = stdObj?.asalSekolah || r.asalSekolah || appData.settings.schoolName || '';
+                    return (
+                        String(r.nisn || '').toLowerCase().includes(searchQuery) ||
+                        String(r.studentName || '').toLowerCase().includes(searchQuery) ||
+                        schoolStr.toLowerCase().includes(searchQuery)
+                    );
+                });
+
+                displayRowsHtml = filteredDoneResults.map((r, idx) => {
+                    const rKey = r.resultId || r.id;
+                    const isChecked = selectedResultIds.has(rKey);
+                    const stdObj = appData.students.find(s => String(s.id) === String(r.studentId) || String(s.nisn) === String(r.nisn));
+                    const schoolVal = stdObj?.asalSekolah ? stdObj.asalSekolah : (r.asalSekolah || '-');
+                    const exObj = appData.exams.find(e => e.id === r.examId);
+                    const mapelLabel = exObj ? `${exObj.examName} (${getSubjectNameById(exObj.subjectId)})` : (r.examName || '-');
+                    return `
+                        <tr class="border-b border-slate-100 hover:bg-slate-50 ${isChecked ? 'bg-indigo-50/50' : ''}">
+                            <td class="px-4 py-3 text-xs text-center">
+                                <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="window.toggleSelectResult('${escapeHtml(rKey)}', this.checked)" class="w-4 h-4 rounded border-slate-300 text-indigo-600 cursor-pointer">
+                            </td>
+                            <td class="px-4 py-3 text-xs text-slate-500">${idx + 1}</td>
+                            <td class="px-4 py-3 text-xs font-mono">${escapeHtml(r.nisn)}</td>
+                            <td class="px-4 py-3 text-xs font-bold">${escapeHtml(r.studentName)}</td>
+                            <td class="px-4 py-3 text-xs font-semibold ${schoolVal === '-' ? 'text-slate-400 italic' : 'text-indigo-700'}">${escapeHtml(schoolVal)}</td>
+                            <td class="px-4 py-3 text-xs">${escapeHtml(r.className)}</td>
+                            <td class="px-4 py-3 text-xs font-semibold text-slate-700">${escapeHtml(mapelLabel)}</td>
+                            <td class="px-4 py-3 text-xs font-extrabold text-emerald-700 text-sm">${r.finalScore}</td>
+                            <td class="px-4 py-3 text-xs"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold ${r.essayGradingStatus === 'Sudah Dinilai' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">${escapeHtml(r.essayGradingStatus)}</span></td>
+                            <td class="px-4 py-3 text-xs space-x-1 whitespace-nowrap">
+                                <button type="button" onclick="window.openEssayGradingModal('${escapeHtml(rKey)}')" class="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-bold cursor-pointer"><i class="fa-solid fa-pen-clip mr-1"></i> Koreksi Uraian</button>
+                                <button type="button" onclick="window.deleteSingleExamResult('${escapeHtml(rKey)}')" class="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-bold cursor-pointer"><i class="fa-solid fa-trash"></i></button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            const allFilteredSelected = examFilteredResults.length > 0 && examFilteredResults.every(r => selectedResultIds.has(r.resultId || r.id));
+            const selectedCount = selectedResultIds.size;
+
+            container.innerHTML = `
+                <div class="space-y-4">
+                    <div class="glass-panel p-4 rounded-2xl shadow-xs border border-slate-200 flex flex-wrap justify-between items-center gap-3">
+                        <div>
+                            <h3 class="font-bold text-sm text-slate-800">Rekapitulasi Hasil Ujian &amp; Koreksi Uraian</h3>
+                            <p class="text-xs text-slate-500">Daftar nilai akhir siswa, koreksi manual soal esai/uraian, pemantauan siswa mengerjakan/belum login, dan cetak rekap per paket ujian.</p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button type="button" onclick="window.deleteSelectedExamResults()" ${selectedCount > 0 ? '' : 'disabled'} class="px-3 py-2 ${selectedCount > 0 ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition">
+                                <i class="fa-solid fa-trash-can mr-1"></i> Hapus Terpilih (${selectedCount})
+                            </button>
+                            <button type="button" onclick="window.deleteAllFilteredExamResults()" ${examFilteredResults.length > 0 ? '' : 'disabled'} class="px-3 py-2 ${examFilteredResults.length > 0 ? 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition">
+                                <i class="fa-solid fa-broom mr-1"></i> Bersihkan Riwayat (${examFilteredResults.length})
+                            </button>
+                            <button type="button" onclick="window.forceFinalizeAllExpiredSessions()" class="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer">
+                                <i class="fa-solid fa-rotate mr-1"></i> Tarik Sesi Belum Kirim
+                            </button>
+                            <div class="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1">
+                                <i class="fa-solid fa-filter text-indigo-600 text-xs"></i>
+                                <select id="resultExamFilterSelect" onchange="window.filterResultsByExam(this.value)" class="bg-transparent text-xs font-bold text-slate-700 focus:outline-none py-1">
+                                    <option value="ALL">Semua Paket Ujian (${allValidResults.length} Hasil)</option>
+                                    ${examOpts}
+                                </select>
+                            </div>
+                            <button type="button" onclick="window.exportResultsExcel()" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer">
+                                <i class="fa-solid fa-file-excel mr-1"></i> Ekspor Nilai Excel
+                            </button>
+                            <button type="button" onclick="window.printResultsByCurrentFilter()" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer">
+                                <i class="fa-solid fa-file-pdf mr-1"></i> Cetak Rekap Per Paket Ujian
+                            </button>
+                            <button type="button" onclick="window.printResultsReport()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer">
+                                <i class="fa-solid fa-print mr-1"></i> Cetak Rekap
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="glass-panel p-3.5 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                        <div class="relative flex-1 min-w-[220px]">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-2.5 text-slate-400 text-xs"></i>
+                            <input type="text" id="resultSearchInput" value="${escapeHtml(appData.filters.resultSearch || '')}" oninput="window.filterResultsSearch(this.value)" placeholder="Cari NISN, Nama Siswa, atau Asal Sekolah..." class="w-full pl-9 pr-4 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                            <span class="text-slate-400 uppercase tracking-wider text-[10px]"><i class="fa-solid fa-filter mr-1"></i> Filter Siswa:</span>
+                            <button type="button" onclick="window.filterResultsStatus('ALL')" class="px-3 py-1 rounded-full transition cursor-pointer ${statusFilter === 'ALL' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}">Sudah Selesai (${countDone})</button>
+                            <button type="button" onclick="window.filterResultsStatus('IN_PROGRESS')" class="px-3 py-1 rounded-full transition cursor-pointer ${statusFilter === 'IN_PROGRESS' ? 'bg-blue-600 text-white shadow-xs' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}">Sedang Mengerjakan (${countInProgress})</button>
+                            <button type="button" onclick="window.filterResultsStatus('NOT_LOGGED_IN')" class="px-3 py-1 rounded-full transition cursor-pointer ${statusFilter === 'NOT_LOGGED_IN' ? 'bg-amber-500 text-slate-950 shadow-xs' : 'bg-amber-50 text-amber-800 hover:bg-amber-100'}">Belum Login (${countNotLoggedIn})</button>
+                        </div>
+                    </div>
+
+                    <div class="glass-panel rounded-2xl overflow-hidden border border-slate-200">
+                        <div class="table-responsive-wrapper custom-scrollbar">
+                            <table class="w-full min-w-[820px] text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase">
+                                        <th class="px-4 py-3 text-center w-10">
+                                            <input type="checkbox" ${allFilteredSelected ? 'checked' : ''} onchange="window.toggleSelectAllResults(this.checked)" class="w-4 h-4 rounded border-slate-300 text-indigo-600 cursor-pointer">
+                                        </th>
+                                        <th class="px-4 py-3">No</th>
+                                        <th class="px-4 py-3">NISN</th>
+                                        <th class="px-4 py-3">Nama Siswa</th>
+                                        <th class="px-4 py-3">Asal Sekolah</th>
+                                        <th class="px-4 py-3">Kelas</th>
+                                        <th class="px-4 py-3">Paket Ujian / Mapel</th>
+                                        <th class="px-4 py-3">Nilai Akhir</th>
+                                        <th class="px-4 py-3">Status Uraian</th>
+                                        <th class="px-4 py-3">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${displayRowsHtml || '<tr><td colspan="10" class="px-4 py-6 text-center text-xs text-slate-400">Tidak ada data hasil ujian atau peserta yang cocok dengan filter.</td></tr>'}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.filterResultsByExam = function(examId) {
+            appData.filters.resultExam = examId || 'ALL';
+            renderResultsContent(document.getElementById('adminMainContent'));
+        };
+
+        window.filterResultsStatus = function(statusKey) {
+            appData.filters.resultClass = statusKey || 'ALL';
+            renderResultsContent(document.getElementById('adminMainContent'));
+        };
+
+        window.filterResultsSearch = function(queryStr) {
+            appData.filters.resultSearch = queryStr;
+            renderResultsContent(document.getElementById('adminMainContent'));
+            const inputEl = document.getElementById('resultSearchInput');
+            if (inputEl) {
+                inputEl.focus();
+                const len = inputEl.value.length;
+                try { inputEl.setSelectionRange(len, len); } catch (e) {}
+            }
+        };
+
+        window.toggleSelectResult = function(resultKey, isChecked) {
+            if (!resultKey) return;
+            if (isChecked) selectedResultIds.add(resultKey);
+            else selectedResultIds.delete(resultKey);
+            renderResultsContent(document.getElementById('adminMainContent'));
+        };
+
+        window.toggleSelectAllResults = function(isChecked) {
+            const filterExamId = appData.filters.resultExam || 'ALL';
+            const filteredResults = getValidExamResults(filterExamId);
+            filteredResults.forEach(r => {
+                const key = r.resultId || r.id;
+                if (isChecked) selectedResultIds.add(key);
+                else selectedResultIds.delete(key);
+            });
+            renderResultsContent(document.getElementById('adminMainContent'));
+        };
+
+        window.deleteSingleExamResult = function(resultKey) {
+            if (!resultKey) return;
+            const target = appData.examResults.find(r => String(r._docId || r.resultId || r.id) === String(resultKey) || String(r.resultId || r.id) === String(resultKey));
+            const docId = target ? String(target._docId || target.resultId || target.id) : String(resultKey);
+            window.showModal('Hapus Riwayat Nilai', 'Yakin ingin menghapus data riwayat nilai ini?', 'error', async (confirmed) => {
+                if (!confirmed) return true;
+                selectedResultIds.delete(resultKey);
+                selectedResultIds.delete(docId);
+                if (target) {
+                    const sessId = getSessionDocId(target.examId, target.studentId);
+                    await syncCollectionRecord('examSessions', sessId, null, true);
+                }
+                await syncCollectionRecord('examResults', docId, null, true);
+                renderResultsContent(document.getElementById('adminMainContent'));
+                return true;
+            }, { showCancel: true, okText: 'Ya, Hapus Nilai' });
+        };
+
+        window.deleteSelectedExamResults = function() {
+            const idsToDelete = Array.from(selectedResultIds);
+            if (idsToDelete.length === 0) return;
+            window.showModal('Hapus Riwayat Nilai Terpilih', `Hapus ${idsToDelete.length} riwayat nilai yang dicentang?`, 'error', async (confirmed) => {
+                if (!confirmed) return true;
+                const idSet = new Set(idsToDelete.map(String));
+                const targets = appData.examResults.filter(r => idSet.has(String(r.resultId || r.id)) || idSet.has(String(r._docId || r.id)));
+                const resDocIds = targets.map(t => String(t._docId || t.resultId || t.id)).filter(Boolean);
+                const sessDocIds = targets.map(t => getSessionDocId(t.examId, t.studentId)).filter(Boolean);
+                if (sessDocIds.length > 0) await bulkSyncCollectionRecords('examSessions', sessDocIds, true);
+                if (resDocIds.length > 0) await bulkSyncCollectionRecords('examResults', resDocIds, true);
+                selectedResultIds.clear();
+                renderResultsContent(document.getElementById('adminMainContent'));
+                window.showModal('Berhasil Dihapus', `${resDocIds.length} riwayat nilai berhasil dihapus.`, 'success');
+                return true;
+            }, { showCancel: true, okText: `Ya, Hapus ${idsToDelete.length} Nilai` });
+        };
+
+        window.deleteAllFilteredExamResults = function() {
+            const filterExamId = appData.filters.resultExam || 'ALL';
+            const filteredResults = getValidExamResults(filterExamId);
+            if (filteredResults.length === 0) return;
+            window.showModal('Bersihkan Riwayat Nilai', `Hapus seluruh (${filteredResults.length}) riwayat nilai pada daftar ini?`, 'error', async (confirmed) => {
+                if (!confirmed) return true;
+                const resDocIds = filteredResults.map(t => String(t._docId || t.resultId || t.id)).filter(Boolean);
+                const sessDocIds = filteredResults.map(t => getSessionDocId(t.examId, t.studentId)).filter(Boolean);
+                if (sessDocIds.length > 0) await bulkSyncCollectionRecords('examSessions', sessDocIds, true);
+                if (resDocIds.length > 0) await bulkSyncCollectionRecords('examResults', resDocIds, true);
+                filteredResults.forEach(t => selectedResultIds.delete(t.resultId || t.id));
+                renderResultsContent(document.getElementById('adminMainContent'));
+                window.showModal('Riwayat Dibersihkan', 'Seluruh riwayat nilai pada daftar ini telah dibersihkan.', 'success');
+                return true;
+            }, { showCancel: true, okText: `Ya, Bersihkan (${filteredResults.length} Hasil)` });
+        };
+
+        function autoFinalizeExpiredSessions() {
+            const nowMs = Date.now();
+            (appData.examSessions || []).forEach(sess => {
+                if (sess.status !== 'IN_PROGRESS') return;
+                const ex = appData.exams.find(e => e.id === sess.examId);
+                if (!ex) return;
+                const studentAns = sess.answers || {};
+                const answeredKeys = Object.keys(studentAns).filter(k => isQuestionAnswered(studentAns[k]));
+                if (answeredKeys.length === 0) return;
+
+                const isTimeUp = sess.endTimeMs && nowMs >= sess.endTimeMs;
+                const isExamClosedOrExpired = !isExamStrictlyActive(ex) || checkExamScheduleAccess(ex).state === 'EXPIRED';
+                if (isTimeUp || isExamClosedOrExpired) {
+                    const existingRes = appData.examResults.find(r => r.studentId === sess.studentId && r.examId === sess.examId);
+                    if (!existingRes) {
+                        const qList = getQuestionsForExamAnalysis(ex.id);
+                        if (qList.length === 0) return;
+                        const calc = window.calculateExamSubmissionScore(qList, studentAns, {});
+                        const resultObj = {
+                            resultId: 'RES-' + sess.studentId + '-' + sess.examId,
+                            examId: sess.examId,
+                            examName: ex.examName,
+                            subjectId: ex.subjectId || sess.subjectId || '',
+                            studentId: sess.studentId,
+                            nisn: sess.nisn,
+                            studentName: sess.studentName,
+                            classId: sess.classId || '',
+                            className: sess.className || '4',
+                            submittedAt: new Date().toLocaleString('id-ID') + ' (Auto-Submit Waktu Habis)',
+                            totalScoreObtained: calc.totalScoreObtained,
+                            maxPossibleScore: calc.maxPossibleScore || 100,
+                            finalScore: calc.finalScore,
+                            correctCount: calc.correctCount,
+                            wrongCount: calc.wrongCount,
+                            emptyCount: calc.emptyCount,
+                            violationCount: sess.violationCount || 0,
+                            essayGradingStatus: calc.hasEssayQuestion ? 'Belum Dinilai' : 'Sudah Dinilai',
+                            essayScores: calc.essayScores,
+                            questionScores: calc.questionScores,
+                            answersSnapshot: studentAns
+                        };
+                        syncCollectionRecord('examResults', resultObj.resultId, resultObj);
+                        sess.status = 'SUBMITTED';
+                        syncCollectionRecord('examSessions', sess.id, sess);
+                    }
+                }
+            });
+        }
+
+        window.forceFinalizeAllExpiredSessions = function() {
+            autoFinalizeExpiredSessions();
+            renderResultsContent(document.getElementById('adminMainContent'));
+            window.showModal('Penyelarasan Sesi Selesai', 'Seluruh sesi siswa yang kehabisan waktu telah ditarik ke rekap nilai.', 'success');
+        };
+
+        window.openEssayGradingModal = function(resultId) {
+            const res = appData.examResults.find(r => (r.resultId || r.id) === resultId);
+            if (!res) return;
+            const examQuestions = getQuestionsForExamAnalysis(res.examId);
+            const essayQuestions = examQuestions.filter(q => q.type === 'essay');
+            if (essayQuestions.length === 0) {
+                window.showModal('Info', 'Ujian ini tidak memiliki soal uraian.', 'info');
+                return;
+            }
+            const itemsHtml = essayQuestions.map((q, idx) => {
+                const maxW = Math.max(0, Number(q.weight) || 10);
+                const studentAns = res.answersSnapshot?.[q.id] ?? '(Kosong)';
+                const curScore = res.essayScores?.[q.id] ?? 0;
+                return `
+                    <div class="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                        <p class="font-bold text-slate-800">Uraian #${q.orderNum || (idx + 1)} (Maks ${maxW} Poin): ${escapeHtml(q.questionText)}</p>
+                        <p class="p-2 bg-white rounded-xl border text-slate-700">${escapeHtml(String(studentAns))}</p>
+                        <input type="number" step="0.5" min="0" max="${maxW}" data-essay-qid="${escapeHtml(q.id)}" data-essay-max="${maxW}" value="${curScore}" class="essay-grade-input w-full px-3 py-2 border rounded-xl font-bold">
+                    </div>
+                `;
+            }).join('');
+
+            window.showModal('Koreksi Soal Uraian', '', 'info', async (confirmed) => {
+                if (!confirmed) return true;
+                res.essayScores = res.essayScores || {};
+                document.querySelectorAll('.essay-grade-input').forEach(inp => {
+                    const qid = inp.getAttribute('data-essay-qid');
+                    const maxW = Number(inp.getAttribute('data-essay-max')) || 10;
+                    if (qid) res.essayScores[qid] = safeRoundTwoDecimals(Math.min(maxW, Math.max(0, Number(inp.value) || 0)));
+                });
+                const recalc = window.calculateExamSubmissionScore(examQuestions, res.answersSnapshot || {}, res.essayScores);
+                res.totalScoreObtained = recalc.totalScoreObtained;
+                res.maxPossibleScore = recalc.maxPossibleScore;
+                res.finalScore = recalc.finalScore;
+                res.essayGradingStatus = 'Sudah Dinilai';
+                await syncCollectionRecord('examResults', res.resultId || res.id, res);
+                renderResultsContent(document.getElementById('adminMainContent'));
+                return true;
+            }, { html: `<div class="space-y-3 text-xs">${itemsHtml}</div>`, wide: true, showCancel: true, okText: 'Simpan Nilai Uraian' });
+        };
+
+        window.exportResultsExcel = function() {
+            const list = getValidExamResults(appData.filters.resultExam || 'ALL');
+            const headers = ['No', 'NISN', 'Nama Siswa', 'Asal Sekolah', 'Kelas', 'Ujian', 'Nilai Akhir', 'Benar', 'Salah', 'Kosong', 'Waktu Selesai'];
+            const rows = list.map((r, i) => {
+                const stdObj = appData.students.find(s => String(s.id) === String(r.studentId) || String(s.nisn) === String(r.nisn));
+                const schoolVal = stdObj?.asalSekolah || r.asalSekolah || '-';
+                return [i + 1, r.nisn, r.studentName, schoolVal, r.className, r.examName || '-', r.finalScore, r.correctCount || 0, r.wrongCount || 0, r.emptyCount || 0, r.submittedAt || '-'];
+            });
+            window.downloadExcelFile('Rekap_Nilai_CBT.xlsx', headers, rows);
+        };
+
+        window.renderAndTriggerPrint = function(fullHtmlDoc, bodyContentOnly, docTitle = 'Cetak Laporan') {
+            window._lastPrintFullHtml = fullHtmlDoc;
+            const printableEl = document.getElementById('printableArea');
+            if (printableEl) printableEl.innerHTML = bodyContentOnly;
+            let printFrame = document.getElementById('cbtPrintFrame');
+            if (!printFrame) {
+                printFrame = document.createElement('iframe');
+                printFrame.id = 'cbtPrintFrame';
+                printFrame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+                document.body.appendChild(printFrame);
+            }
+            const frameDoc = printFrame.contentWindow || printFrame.contentDocument;
+            const targetDoc = frameDoc.document || frameDoc;
+            targetDoc.open();
+            targetDoc.write(fullHtmlDoc);
+            targetDoc.close();
+            setTimeout(() => {
+                try { frameDoc.focus(); frameDoc.print(); } catch (e) {}
+            }, 250);
+        };
+
+        window.printResultsByCurrentFilter = function() {
+            const currentExamFilter = appData.filters.resultExam || 'ALL';
+            const selectedExam = currentExamFilter !== 'ALL' ? appData.exams.find(e => String(e.id) === String(currentExamFilter)) : null;
+            const list = selectedExam ? getValidExamResults(selectedExam.id) : getValidExamResults('ALL');
+            const titleLabel = selectedExam ? `${selectedExam.examName} (${getSubjectNameById(selectedExam.subjectId)})` : 'Semua Paket Ujian';
+            const rowsHtml = list.map((r, i) => {
+                const stdObj = appData.students.find(s => String(s.id) === String(r.studentId) || String(s.nisn) === String(r.nisn));
+                const schoolVal = stdObj?.asalSekolah || r.asalSekolah || '-';
+                return `<tr><td style="border:1px solid #cbd5e1;padding:6px;text-align:center;">${i + 1}</td><td style="border:1px solid #cbd5e1;padding:6px;">${escapeHtml(r.nisn)}</td><td style="border:1px solid #cbd5e1;padding:6px;">${escapeHtml(r.studentName)}</td><td style="border:1px solid #cbd5e1;padding:6px;">${escapeHtml(schoolVal)}</td><td style="border:1px solid #cbd5e1;padding:6px;text-align:center;">${escapeHtml(r.className)}</td><td style="border:1px solid #cbd5e1;padding:6px;text-align:center;font-weight:bold;">${r.finalScore}</td></tr>`;
+            }).join('') || '<tr><td colspan="6" style="border:1px solid #cbd5e1;padding:10px;text-align:center;">Belum ada nilai.</td></tr>';
+            const bodyContentOnly = `<h2 style="text-align:center;margin-bottom:10px;">REKAPITULASI NILAI — ${escapeHtml(titleLabel)} (${escapeHtml(appData.settings.schoolName)})</h2><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr><th style="background:#1e293b;color:#fff;padding:6px;">No</th><th style="background:#1e293b;color:#fff;padding:6px;">NISN</th><th style="background:#1e293b;color:#fff;padding:6px;">Nama</th><th style="background:#1e293b;color:#fff;padding:6px;">Asal Sekolah</th><th style="background:#1e293b;color:#fff;padding:6px;">Kelas</th><th style="background:#1e293b;color:#fff;padding:6px;">Nilai</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+            const fullHtmlDoc = `<!DOCTYPE html><html><head><title>Rekap Nilai</title></head><body>${bodyContentOnly}</body></html>`;
+            window.renderAndTriggerPrint(fullHtmlDoc, bodyContentOnly, `Rekap Nilai - ${titleLabel}`);
+        };
+
+        window.printResultsReport = function() {
+            window.printResultsByCurrentFilter();
+        };
 
         window.toggleSelectStudent = function(studentId, isChecked) {
             const key = String(studentId || '').trim();
