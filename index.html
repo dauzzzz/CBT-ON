@@ -779,6 +779,11 @@
                     maxPossibleScore: Number(row.max_possible_score ?? row.maxPossibleScore ?? 100),
                     finalScore: Number(row.final_score ?? row.finalScore ?? 0),
                     correctCount: Number(row.correct_count ?? row.correctCount ?? 0),
+                    partialCount: Number(
+                        row.partial_count ??
+                        row.partialCount ??
+                        (Array.isArray(row.question_scores) ? row.question_scores.filter(q => q && q.status === 'PARTIAL').length : 0)
+                    ),
                     wrongCount: Number(row.wrong_count ?? row.wrongCount ?? 0),
                     emptyCount: Number(row.empty_count ?? row.emptyCount ?? 0),
                     violationCount: Number(row.violation_count ?? row.violationCount ?? 0),
@@ -3334,6 +3339,29 @@
         }
 
         // Hasil & Koreksi
+        function getResultBpskCounts(r) {
+            if (!r) return { b: 0, p: 0, s: 0, k: 0 };
+            const qList = getQuestionsForExamAnalysis(r.examId);
+            if (qList.length > 0 && r.answersSnapshot && typeof r.answersSnapshot === 'object') {
+                const calc = window.calculateExamSubmissionScore(qList, r.answersSnapshot, r.essayScores || {});
+                return {
+                    b: calc.correctCount || 0,
+                    p: calc.partialCount || 0,
+                    s: calc.wrongCount || 0,
+                    k: calc.emptyCount || 0
+                };
+            }
+            const partialFromScores = Array.isArray(r.questionScores)
+                ? r.questionScores.filter(q => q && q.status === 'PARTIAL').length
+                : 0;
+            return {
+                b: Number(r.correctCount) || 0,
+                p: Number(r.partialCount ?? partialFromScores) || 0,
+                s: Number(r.wrongCount) || 0,
+                k: Number(r.emptyCount) || 0
+            };
+        }
+
         function renderResultsContent(container) {
             cleanupOrphanedResultsAndSessionsInCloud();
             autoFinalizeExpiredSessions();
@@ -3404,6 +3432,7 @@
                             <td class="px-4 py-3 text-xs font-semibold ${schoolVal === '-' ? 'text-slate-400 italic' : 'text-indigo-700'}">${escapeHtml(schoolVal)}</td>
                             <td class="px-4 py-3 text-xs">${escapeHtml(ss.className || '-')}</td>
                             <td class="px-4 py-3 text-xs font-semibold text-slate-700">${escapeHtml(mapelLabel)}</td>
+                            <td class="px-4 py-3 text-xs text-slate-400 text-center">-</td>
                             <td class="px-4 py-3 text-xs font-bold text-blue-600">${ss.answeredCount || 0} / ${ss.totalQuestions || '-'} Soal</td>
                             <td class="px-4 py-3 text-xs"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">Sedang Mengerjakan</span></td>
                             <td class="px-4 py-3 text-xs whitespace-nowrap">
@@ -3437,6 +3466,7 @@
                             <td class="px-4 py-3 text-xs font-semibold ${schoolVal === '-' ? 'text-slate-400 italic' : 'text-indigo-700'}">${escapeHtml(schoolVal)}</td>
                             <td class="px-4 py-3 text-xs">${escapeHtml(s.className || '-')}</td>
                             <td class="px-4 py-3 text-xs font-semibold text-slate-700">${escapeHtml(mapelLabel)}</td>
+                            <td class="px-4 py-3 text-xs text-slate-400 text-center">-</td>
                             <td class="px-4 py-3 text-xs text-slate-400">-</td>
                             <td class="px-4 py-3 text-xs"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">Belum Login</span></td>
                             <td class="px-4 py-3 text-xs text-slate-400">Menunggu Login</td>
@@ -3462,6 +3492,7 @@
                     const schoolVal = stdObj?.asalSekolah ? stdObj.asalSekolah : (r.asalSekolah || '-');
                     const exObj = appData.exams.find(e => e.id === r.examId);
                     const mapelLabel = exObj ? `${exObj.examName} (${getSubjectNameById(exObj.subjectId)})` : (r.examName || '-');
+                    const counts = getResultBpskCounts(r);
                     return `
                         <tr class="border-b border-slate-100 hover:bg-slate-50 ${isChecked ? 'bg-indigo-50/50' : ''}">
                             <td class="px-4 py-3 text-xs text-center">
@@ -3473,6 +3504,12 @@
                             <td class="px-4 py-3 text-xs font-semibold ${schoolVal === '-' ? 'text-slate-400 italic' : 'text-indigo-700'}">${escapeHtml(schoolVal)}</td>
                             <td class="px-4 py-3 text-xs">${escapeHtml(r.className)}</td>
                             <td class="px-4 py-3 text-xs font-semibold text-slate-700">${escapeHtml(mapelLabel)}</td>
+                            <td class="px-4 py-3 text-xs text-center whitespace-nowrap font-semibold">
+                                <span class="text-emerald-700">${counts.b}B</span> /
+                                <span class="text-amber-600">${counts.p}P</span> /
+                                <span class="text-red-600">${counts.s}S</span> /
+                                <span class="text-slate-500">${counts.k}K</span>
+                            </td>
                             <td class="px-4 py-3 text-xs font-extrabold text-emerald-700 text-sm">${r.finalScore}</td>
                             <td class="px-4 py-3 text-xs"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold ${r.essayGradingStatus === 'Sudah Dinilai' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">${escapeHtml(r.essayGradingStatus)}</span></td>
                             <td class="px-4 py-3 text-xs space-x-1 whitespace-nowrap">
@@ -3538,7 +3575,7 @@
 
                     <div class="glass-panel rounded-2xl overflow-hidden border border-slate-200">
                         <div class="table-responsive-wrapper custom-scrollbar">
-                            <table class="w-full min-w-[820px] text-left border-collapse">
+                            <table class="w-full min-w-[900px] text-left border-collapse">
                                 <thead>
                                     <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase">
                                         <th class="px-4 py-3 text-center w-10">
@@ -3550,13 +3587,21 @@
                                         <th class="px-4 py-3">Asal Sekolah</th>
                                         <th class="px-4 py-3">Kelas</th>
                                         <th class="px-4 py-3">Paket Ujian / Mapel</th>
+                                        <th class="px-4 py-3 text-center whitespace-nowrap">B / P / S / K</th>
                                         <th class="px-4 py-3">Nilai Akhir</th>
                                         <th class="px-4 py-3">Status Uraian</th>
                                         <th class="px-4 py-3">Aksi</th>
                                     </tr>
                                 </thead>
-                                <tbody>${displayRowsHtml || '<tr><td colspan="10" class="px-4 py-6 text-center text-xs text-slate-400">Tidak ada data hasil ujian atau peserta yang cocok dengan filter.</td></tr>'}</tbody>
+                                <tbody>${displayRowsHtml || '<tr><td colspan="11" class="px-4 py-6 text-center text-xs text-slate-400">Tidak ada data hasil ujian atau peserta yang cocok dengan filter.</td></tr>'}</tbody>
                             </table>
+                        </div>
+                        <div class="px-4 py-2.5 bg-slate-50/80 border-t border-slate-200 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <span class="font-bold text-slate-600">Keterangan B / P / S / K:</span>
+                            <span><strong class="text-emerald-700">B</strong> = Benar</span>
+                            <span><strong class="text-amber-600">P</strong> = Parsial (Sebagian Benar)</span>
+                            <span><strong class="text-red-600">S</strong> = Salah</span>
+                            <span><strong class="text-slate-600">K</strong> = Kosong / Tidak Dijawab</span>
                         </div>
                     </div>
                 </div>
@@ -3753,11 +3798,12 @@
 
         window.exportResultsExcel = function() {
             const list = getValidExamResults(appData.filters.resultExam || 'ALL');
-            const headers = ['No', 'NISN', 'Nama Siswa', 'Asal Sekolah', 'Kelas', 'Ujian', 'Nilai Akhir', 'Benar', 'Salah', 'Kosong', 'Waktu Selesai'];
+            const headers = ['No', 'NISN', 'Nama Siswa', 'Asal Sekolah', 'Kelas', 'Ujian', 'Nilai Akhir', 'Benar (B)', 'Parsial (P)', 'Salah (S)', 'Kosong (K)', 'Waktu Selesai'];
             const rows = list.map((r, i) => {
                 const stdObj = appData.students.find(s => String(s.id) === String(r.studentId) || String(s.nisn) === String(r.nisn));
                 const schoolVal = stdObj?.asalSekolah || r.asalSekolah || '-';
-                return [i + 1, r.nisn, r.studentName, schoolVal, r.className, r.examName || '-', r.finalScore, r.correctCount || 0, r.wrongCount || 0, r.emptyCount || 0, r.submittedAt || '-'];
+                const counts = getResultBpskCounts(r);
+                return [i + 1, r.nisn, r.studentName, schoolVal, r.className, r.examName || '-', r.finalScore, counts.b, counts.p, counts.s, counts.k, r.submittedAt || '-'];
             });
             window.downloadExcelFile('Rekap_Nilai_CBT.xlsx', headers, rows);
         };
@@ -3824,6 +3870,7 @@
                 const scoreNum = Number(r.finalScore) || 0;
                 const scoreColor = scoreNum >= 75 ? '#047857' : (scoreNum >= 60 ? '#b45309' : '#dc2626');
                 const rowBg = i % 2 === 1 ? '#f8fafc' : '#ffffff';
+                const counts = getResultBpskCounts(r);
                 return `
                     <tr style="background:${rowBg};page-break-inside:avoid;break-inside:avoid;">
                         <td style="border:1px solid #cbd5e1;padding:${cellPad};text-align:center;color:#475569;white-space:nowrap;">${i + 1}</td>
@@ -3832,9 +3879,10 @@
                         <td style="border:1px solid #cbd5e1;padding:${cellPad};color:#334155;line-height:1.4;word-break:normal;overflow-wrap:break-word;">${escapeHtml(schoolVal)}</td>
                         <td style="border:1px solid #cbd5e1;padding:${cellPad};text-align:center;font-weight:600;color:#334155;white-space:nowrap;">${escapeHtml(r.className || '-')}</td>
                         <td style="border:1px solid #cbd5e1;padding:${cellPad};text-align:center;font-size:10.5px;color:#334155;white-space:nowrap;">
-                            <span style="color:#047857;font-weight:700;">${r.correctCount || 0}B</span> /
-                            <span style="color:#dc2626;font-weight:700;">${r.wrongCount || 0}S</span> /
-                            <span style="color:#64748b;">${r.emptyCount || 0}K</span>
+                            <span style="color:#047857;font-weight:700;">${counts.b}B</span> /
+                            <span style="color:#d97706;font-weight:700;">${counts.p}P</span> /
+                            <span style="color:#dc2626;font-weight:700;">${counts.s}S</span> /
+                            <span style="color:#64748b;">${counts.k}K</span>
                         </td>
                         <td style="border:1px solid #cbd5e1;padding:${cellPad};text-align:center;font-weight:800;font-size:12.5px;color:${scoreColor};white-space:nowrap;">${scoreNum}</td>
                         <td style="border:1px solid #cbd5e1;padding:${cellPad};text-align:center;font-size:10.5px;color:#334155;white-space:nowrap;">${escapeHtml(r.essayGradingStatus || 'Sudah Dinilai')}</td>
@@ -3889,13 +3937,22 @@
                                 <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:left;min-width:${isLandscape ? '210px' : '155px'};">Nama Peserta</th>
                                 <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:left;min-width:${isLandscape ? '170px' : '120px'};">Asal Sekolah</th>
                                 <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:center;white-space:nowrap;">Kelas</th>
-                                <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:center;white-space:nowrap;">B / S / K</th>
+                                <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:center;white-space:nowrap;">B / P / S / K</th>
                                 <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:center;white-space:nowrap;">Nilai Akhir</th>
                                 <th style="background:#1e293b;color:#ffffff;padding:${cellPad};border:1px solid #1e293b;text-align:center;white-space:nowrap;">Keterangan</th>
                             </tr>
                         </thead>
                         <tbody>${rowsHtml}</tbody>
                     </table>
+
+                    <!-- Keterangan Kolom B / P / S / K -->
+                    <div style="margin-top:8px;font-size:10px;color:#475569;">
+                        <strong>Keterangan:</strong>
+                        <span style="color:#047857;font-weight:700;">B</span> = Benar &nbsp;|&nbsp;
+                        <span style="color:#d97706;font-weight:700;">P</span> = Parsial (Sebagian Benar) &nbsp;|&nbsp;
+                        <span style="color:#dc2626;font-weight:700;">S</span> = Salah &nbsp;|&nbsp;
+                        <span style="color:#64748b;font-weight:700;">K</span> = Kosong / Tidak Dijawab
+                    </div>
 
                     <!-- Blok Tanda Tangan -->
                     <div style="display:flex;justify-content:flex-end;margin-top:24px;page-break-inside:avoid;break-inside:avoid;">
