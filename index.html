@@ -1080,6 +1080,43 @@
             }
         }
 
+        // Pembaruan khusus status login & heartbeat siswa menggunakan UPDATE (bukan UPSERT)
+        // agar selalu kompatibel dengan kebijakan RLS role anon pada tabel students
+        async function updateStudentLoginStateInDb(studentId, lockFields) {
+            const safeId = String(studentId || '').trim();
+            if (!safeId) return false;
+
+            const localStd = appData.students.find(s => String(s._docId || s.id) === safeId);
+            if (localStd) {
+                if ('isLoggedIn' in lockFields) localStd.isLoggedIn = Boolean(lockFields.isLoggedIn);
+                if ('activeSessionId' in lockFields) localStd.activeSessionId = String(lockFields.activeSessionId || '');
+                if ('loginAt' in lockFields) localStd.loginAt = String(lockFields.loginAt || '');
+                if ('lastHeartbeatAt' in lockFields) localStd.lastHeartbeatAt = Number(lockFields.lastHeartbeatAt || 0);
+                if ('deviceInfo' in lockFields) localStd.deviceInfo = String(lockFields.deviceInfo || '');
+            }
+
+            if (IS_PREVIEW || !supabase) return true;
+
+            const dbPatch = {};
+            if ('isLoggedIn' in lockFields) dbPatch.is_logged_in = Boolean(lockFields.isLoggedIn);
+            if ('activeSessionId' in lockFields) dbPatch.active_session_id = String(lockFields.activeSessionId || '');
+            if ('loginAt' in lockFields) dbPatch.login_at = String(lockFields.loginAt || '');
+            if ('lastHeartbeatAt' in lockFields) dbPatch.last_heartbeat_at = Number(lockFields.lastHeartbeatAt || 0);
+            if ('deviceInfo' in lockFields) dbPatch.device_info = String(lockFields.deviceInfo || '');
+
+            try {
+                const { error } = await supabase
+                    .from('students')
+                    .update(dbPatch)
+                    .eq('id', safeId);
+                if (error) throw error;
+                return true;
+            } catch (err) {
+                console.warn(`Update status login siswa [${safeId}] gagal sementara:`, err?.message || err);
+                return false;
+            }
+        }
+
         async function fetchSingleRecordFromDb(collectionName, docId) {
             if (!docId || String(docId).trim() === '') return null;
             const safeDocId = String(docId).trim();
@@ -1287,17 +1324,25 @@
                             }
 
                             if (colName === 'students' && appData.currentUser && appData.currentUser.role === 'student') {
-                                const myLatestDoc = appData.students.find(s => s.id === appData.currentUser.studentId);
-                                if (!myLatestDoc || myLatestDoc.status !== 'Aktif') {
-                                    handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan atau dihapus oleh Administrator.');
-                                    return;
-                                }
-                                if (
-                                    myLatestDoc.isLoggedIn === false ||
-                                    (myLatestDoc.activeSessionId && myLatestDoc.activeSessionId !== currentDeviceSessionId)
-                                ) {
-                                    handleForcedStudentLogout('Sesi login akun Anda telah direset oleh Pengawas / Administrator.');
-                                    return;
+                                const changedId = String(payload.new?.id || payload.old?.id || '');
+                                if (changedId === String(appData.currentUser.studentId)) {
+                                    if (evType === 'DELETE') {
+                                        handleForcedStudentLogout('Akun siswa Anda telah dihapus oleh Administrator.');
+                                        return;
+                                    }
+                                    const remoteRow = payload.new ? mapRowFromDb('students', payload.new) : null;
+                                    if (remoteRow && remoteRow.status !== 'Aktif') {
+                                        handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan oleh Administrator.');
+                                        return;
+                                    }
+                                    if (
+                                        remoteRow &&
+                                        (remoteRow.isLoggedIn === false ||
+                                            (remoteRow.activeSessionId && remoteRow.activeSessionId !== currentDeviceSessionId))
+                                    ) {
+                                        handleForcedStudentLogout('Sesi login akun Anda telah direset oleh Pengawas / Administrator.');
+                                        return;
+                                    }
                                 }
                             }
 
@@ -1576,22 +1621,43 @@
                     stopStudentHeartbeat();
                     return;
                 }
-                const studentId = appData.currentUser.studentId;
-                const stdObj = appData.students.find(s => s.id === studentId);
-                if (stdObj) {
-                    if (
-                        (stdObj.activeSessionId && stdObj.activeSessionId !== currentDeviceSessionId) ||
-                        stdObj.isLoggedIn === false
-                    ) {
-                        handleForcedStudentLogout('Sesi login Anda telah direset oleh Pengawas/Administrator.');
+                const studentId = String(appData.currentUser.studentId || '').trim();
+                if (!studentId) return;
+
+                // Verifikasi langsung ke Supabase sebelum memutuskan sesi direset (hindari salah reset karena cache lokal / gangguan jaringan)
+                if (!IS_PREVIEW && supabase) {
+                    try {
+                        const { data: liveRow, error } = await supabase
+                            .from('students')
+                            .select('id, status, is_logged_in, active_session_id')
+                            .eq('id', studentId)
+                            .maybeSingle();
+
+                        if (!error && liveRow) {
+                            if (liveRow.status && liveRow.status !== 'Aktif') {
+                                handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan oleh Administrator.');
+                                return;
+                            }
+                            if (
+                                liveRow.is_logged_in === false ||
+                                (liveRow.active_session_id && liveRow.active_session_id !== currentDeviceSessionId)
+                            ) {
+                                handleForcedStudentLogout('Sesi login Anda telah direset oleh Pengawas/Administrator.');
+                                return;
+                            }
+                        }
+                    } catch (hbErr) {
+                        // Jangan keluarkan siswa saat koneksi internet sedang tidak stabil sementara
                         return;
                     }
-                    stdObj.isLoggedIn = true;
-                    stdObj.activeSessionId = currentDeviceSessionId;
-                    stdObj.lastHeartbeatAt = Date.now();
-                    stdObj.deviceInfo = (navigator.userAgent || getDeviceLabel()).slice(0, 120);
-                    await syncCollectionRecord('students', stdObj.id, stdObj);
                 }
+
+                await updateStudentLoginStateInDb(studentId, {
+                    isLoggedIn: true,
+                    activeSessionId: currentDeviceSessionId,
+                    lastHeartbeatAt: Date.now(),
+                    deviceInfo: (navigator.userAgent || getDeviceLabel()).slice(0, 120)
+                });
             }, 25000);
         }
 
@@ -2386,7 +2452,14 @@
                 matchedStudent.lastHeartbeatAt = nowMs;
                 matchedStudent.deviceInfo = devInfoStr;
 
-                await syncCollectionRecord('students', matchedStudent.id, matchedStudent);
+                upsertLocalRecord('students', matchedStudent.id, matchedStudent);
+                await updateStudentLoginStateInDb(matchedStudent.id, {
+                    isLoggedIn: true,
+                    activeSessionId: currentDeviceSessionId,
+                    loginAt: matchedStudent.loginAt,
+                    lastHeartbeatAt: nowMs,
+                    deviceInfo: devInfoStr
+                });
 
                 appData.currentUser = {
                     role: 'student',
@@ -2500,12 +2573,11 @@
         window.releaseStudentLoginLock = async function(studentIdOverride = null) {
             const targetStudentId = studentIdOverride || (appData.currentUser && appData.currentUser.role === 'student' ? appData.currentUser.studentId : null);
             if (!targetStudentId) return;
-            const stdObj = appData.students.find(s => String(s._docId || s.id) === String(targetStudentId) || String(s.id) === String(targetStudentId));
-            if (!stdObj) return;
-            stdObj.isLoggedIn = false;
-            stdObj.activeSessionId = '';
-            stdObj.lastHeartbeatAt = 0;
-            await syncCollectionRecord('students', stdObj.id, stdObj);
+            await updateStudentLoginStateInDb(targetStudentId, {
+                isLoggedIn: false,
+                activeSessionId: '',
+                lastHeartbeatAt: 0
+            });
         };
 
         window.autoLogoutStudentToInitialLogin = async function(noticeTitle = '', noticeMessage = '', noticeType = 'info') {
