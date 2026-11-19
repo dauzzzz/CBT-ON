@@ -4300,6 +4300,7 @@
                                 ${bankOpts}
                             </select>
                             <button type="button" onclick="window.openBankFormModal()" class="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-folder-plus mr-1"></i> Buat Paket Bank</button>
+                            <button type="button" onclick="window.renumberQuestionsInSelectedBank()" ${canDeleteBank && filteredQuestions.length > 0 ? '' : 'disabled'} class="px-3 py-2 ${canDeleteBank && filteredQuestions.length > 0 ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold" title="Urutkan ulang nomor soal pada paket ini mulai dari 1"><i class="fa-solid fa-arrow-down-1-9 mr-1"></i> Urutkan No 1–${filteredQuestions.length || 1}</button>
                             <button type="button" onclick="window.confirmDeleteQuestionBank()" ${canDeleteBank ? '' : 'disabled'} class="px-3 py-2 ${canDeleteBank ? 'bg-red-50 hover:bg-red-100 text-red-600 cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold"><i class="fa-solid fa-trash-can mr-1"></i> Hapus Paket</button>
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
@@ -4516,8 +4517,12 @@
         };
 
         window.resetQuestionForm = function() {
+            const selectedBank = appData.filters.questionBankId || 'ALL';
+            const bankQuestionsCount = appData.questions.filter(q => selectedBank === 'ALL' || q.bankId === selectedBank).length;
             document.getElementById('editQuestionId').value = '';
             document.getElementById('btnDeleteCurrentQuestion')?.classList.add('hidden');
+            const numEl = document.getElementById('qFormNum');
+            if (numEl) numEl.value = bankQuestionsCount + 1;
             const stimEl = document.getElementById('qFormStimulus');
             if (stimEl) stimEl.value = '';
             const stimImgEl = document.getElementById('qFormStimulusImg');
@@ -4527,6 +4532,24 @@
             document.getElementById('qFormExplanation').value = '';
             window.handleQuestionTypeChange();
             window.updateQuestionLivePreview();
+        };
+
+        window.renumberQuestionsInSelectedBank = async function() {
+            const selectedBank = appData.filters.questionBankId || 'ALL';
+            if (selectedBank === 'ALL') return;
+            const bankQuestions = appData.questions
+                .filter(q => String(q.bankId) === String(selectedBank))
+                .sort((a, b) => (Number(a.orderNum) || 0) - (Number(b.orderNum) || 0));
+            if (bankQuestions.length === 0) return;
+
+            const updatedRecords = bankQuestions.map((q, idx) => ({
+                ...q,
+                orderNum: idx + 1
+            }));
+
+            await bulkSyncCollectionRecords('questions', updatedRecords, false);
+            renderQuestionBanksContent(document.getElementById('adminMainContent'));
+            window.showModal('Nomor Soal Dirapikan', `Seluruh ${updatedRecords.length} soal pada paket ini telah diurutkan ulang mulai dari nomor 1 s.d. ${updatedRecords.length}.`, 'success');
         };
 
         window.loadQuestionIntoForm = function(qId) {
@@ -4662,6 +4685,8 @@
                     const bankId = (appData.filters.questionBankId && appData.filters.questionBankId !== 'ALL')
                         ? appData.filters.questionBankId
                         : (appData.questionBanks[0]?.id || 'QB-DEFAULT');
+                    const bankObj = appData.questionBanks.find(b => String(b.id) === String(bankId));
+                    const existingInBankCount = appData.questions.filter(q => String(q.bankId) === String(bankId)).length;
                     const headerRow = (rows[0] || []).map(h => String(h ?? '').trim().toLowerCase());
                     const hasStimImgCol = headerRow.some(h => h.includes('gambar stimulus') || h.includes('url gambar stimulus')) || headerRow.length >= 12;
                     const hasQImgCol = headerRow.some(h => h.includes('gambar soal')) || headerRow.length >= 13;
@@ -4672,6 +4697,10 @@
                         const optStartIdx = hasQImgCol ? 7 : (hasStimImgCol ? 6 : 5);
                         const questionText = String(cols[qColIdx] ?? '').trim();
                         if (!questionText) continue;
+                        const rawOrderNo = Number(String(cols[0] ?? '').trim());
+                        const orderNum = existingInBankCount === 0
+                            ? (Number.isFinite(rawOrderNo) && rawOrderNo > 0 ? rawOrderNo : (newRecords.length + 1))
+                            : (existingInBankCount + newRecords.length + 1);
                         const type = String(cols[1] ?? 'pg').trim().toLowerCase() || 'pg';
                         const weight = Number(cols[2]) || 10;
                         const stimulusText = String(cols[3] ?? '').trim();
@@ -4701,9 +4730,9 @@
                         newRecords.push({
                             id: 'Q-' + Date.now() + '-' + i,
                             bankId,
-                            subjectId: appData.subjects[0]?.id || '',
-                            classLevel: '4',
-                            orderNum: appData.questions.length + newRecords.length + 1,
+                            subjectId: bankObj?.subjectId || appData.subjects[0]?.id || '',
+                            classLevel: bankObj?.classLevel || '4',
+                            orderNum,
                             type, weight, stimulusText, stimulusImage,
                             questionText, questionImage, options: finalOptions, matchingPairs: finalMatchingPairs,
                             correctAnswer: finalCorrectAnswer,
@@ -4712,8 +4741,17 @@
                     }
                     if (newRecords.length > 0) {
                         await bulkSyncCollectionRecords('questions', newRecords, false);
+                        for (const ex of appData.exams) {
+                            if (String(ex.bankId) === String(bankId)) {
+                                ex.questionIds = Array.isArray(ex.questionIds) ? ex.questionIds : [];
+                                newRecords.forEach(nq => {
+                                    if (!ex.questionIds.includes(nq.id)) ex.questionIds.push(nq.id);
+                                });
+                                await syncCollectionRecord('exams', ex.id, ex);
+                            }
+                        }
                         renderQuestionBanksContent(document.getElementById('adminMainContent'));
-                        window.showModal('Impor Berhasil', `${newRecords.length} butir soal berhasil diimpor.`, 'success');
+                        window.showModal('Impor Berhasil', `${newRecords.length} butir soal berhasil diimpor (dimulai dari nomor ${newRecords[0].orderNum}).`, 'success');
                     }
                 });
             };
