@@ -319,23 +319,6 @@
         const SUPABASE_ANON_KEY = "sb_publishable_tqxwSgLur6RUemAIrSP8qQ_bkNArq0M";
         // ============================================================================
 
-        function isHostedProductionDomain() {
-            try {
-                const host = String(window.location?.hostname || '').toLowerCase();
-                if (!host) return false;
-                const isLocalDev = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local');
-                const isSandboxedArtifact = host.includes('usercontent.goog') || host.includes('webcontainer') || host.includes('stackblitz') || host.includes('csb.app');
-                return !isLocalDev && !isSandboxedArtifact;
-            } catch (e) {
-                return false;
-            }
-        }
-
-        function isEffectivePreviewMode() {
-            if (isHostedProductionDomain()) return false;
-            return Boolean(IS_PREVIEW);
-        }
-
         const APP_VERSION = '5.0.0-SUPABASE';
         const DEFAULT_SCHOOL_LOGO = 'https://placehold.co/100x100/4f46e5/ffffff?text=SDN';
 
@@ -358,7 +341,7 @@
         let isLoginRequestRunning = false;
         let isModalActionRunning = false;
 
-        // Data dummy minimalis (maksimal 1-2 baris per koleksi) hanya aktif bila isEffectivePreviewMode() === true
+        // Data dummy minimalis (maksimal 1-2 baris per koleksi) hanya aktif bila IS_PREVIEW === true
         const PREVIEW_MINIMAL_DATA = {
             settings: {
                 schoolName: 'SD NEGERI GEDONGBOYOUNTUNG',
@@ -1128,7 +1111,7 @@
             window._lastDbSyncError = '';
 
             if (collectionName === 'appSettings') {
-                if (isEffectivePreviewMode() || !supabase) {
+                if (IS_PREVIEW || !supabase) {
                     appData.settings = { ...appData.settings, ...dataObj };
                     updateBrowserFaviconAndTitle();
                     return true;
@@ -1151,7 +1134,7 @@
             const tableName = COLLECTION_TO_TABLE[collectionName];
             if (!tableName) return false;
 
-            if (isEffectivePreviewMode() || !supabase) {
+            if (IS_PREVIEW || !supabase) {
                 if (isDelete) removeLocalRecord(collectionName, safeDocId);
                 else upsertLocalRecord(collectionName, safeDocId, { ...dataObj, id: safeDocId });
                 return true;
@@ -1183,7 +1166,7 @@
         async function fetchSingleRecordFromDb(collectionName, docId) {
             if (!docId || String(docId).trim() === '') return null;
             const safeDocId = String(docId).trim();
-            if (isEffectivePreviewMode() || !supabase) {
+            if (IS_PREVIEW || !supabase) {
                 const list = appData[collectionName] || [];
                 return list.find(x => String(x._docId || x.id || x.resultId) === safeDocId) || null;
             }
@@ -1206,7 +1189,7 @@
             const tableName = COLLECTION_TO_TABLE[collectionName];
             if (!tableName) return { successCount: 0, failedCount: list.length, successIds: new Set(), errorMessage: 'Tabel tidak ditemukan' };
 
-            if (isEffectivePreviewMode() || !supabase) {
+            if (IS_PREVIEW || !supabase) {
                 const successIds = new Set();
                 list.forEach((entry, idx) => {
                     const id = isDelete ? String(entry) : String(entry._docId || entry.id || `ID-${idx}`);
@@ -1312,7 +1295,7 @@
         }
 
         function setupSupabaseRealtimeSubscriptions() {
-            if (isEffectivePreviewMode() || !supabase) return;
+            if (IS_PREVIEW || !supabase) return;
             if (realtimeChannel) {
                 try { supabase.removeChannel(realtimeChannel); } catch (e) {}
                 realtimeChannel = null;
@@ -1461,7 +1444,7 @@
         }
 
         async function initAppEnvironment() {
-            if (isEffectivePreviewMode()) {
+            if (IS_PREVIEW) {
                 appData.settings = { ...appData.settings, ...PREVIEW_MINIMAL_DATA.settings };
                 appData.classes = sanitizePlainData(PREVIEW_MINIMAL_DATA.classes);
                 appData.subjects = sanitizePlainData(PREVIEW_MINIMAL_DATA.subjects);
@@ -1804,7 +1787,7 @@
                     badge.innerHTML = `<i class="fa-solid fa-wifi text-[10px]"></i> <span>Mode Rekoneksi...</span>`;
                 } else {
                     badge.className = 'live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[11px] font-bold flex items-center gap-1.5 transition-all';
-                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${isEffectivePreviewMode() ? 'Preview Lokal' : 'Supabase Live'}</span>`;
+                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview Lokal' : 'Supabase Live'}</span>`;
                 }
             });
 
@@ -2201,7 +2184,7 @@
         // HALAMAN LOGIN HYBRID (ADMIN VIA SUPABASE AUTH + SISWA VIA TABEL DATABASE)
         // ============================================================================
         window.quickPreviewLogin = async function(roleType) {
-            if (!isEffectivePreviewMode()) return;
+            if (!IS_PREVIEW) return;
             if (roleType === 'admin') {
                 appData.currentUser = {
                     role: 'admin',
@@ -2253,6 +2236,20 @@
                    </div>`
                 : `<div class="mt-6 p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-indigo-200">Belum ada ujian berstatus Aktif saat ini.</div>`;
 
+            const previewBadgeHtml = IS_PREVIEW
+                ? `<div class="mb-4 p-3 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs space-y-2">
+                    <div class="flex items-center justify-between font-extrabold">
+                        <span><i class="fa-solid fa-flask text-amber-600 mr-1"></i> Mode Preview Aktif</span>
+                        <span class="px-2 py-0.5 rounded-full bg-amber-200/80 text-[10px]">Memori Lokal</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1.5 pt-1">
+                        <button type="button" onclick="window.quickPreviewLogin('student')" class="py-1.5 px-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-[11px] cursor-pointer">Login Siswa</button>
+                        <button type="button" onclick="window.quickPreviewLogin('editor')" class="py-1.5 px-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-[11px] cursor-pointer">Login Editor</button>
+                        <button type="button" onclick="window.quickPreviewLogin('admin')" class="py-1.5 px-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-[11px] cursor-pointer">Login Admin</button>
+                    </div>
+                   </div>`
+                : '';
+
             const container = document.getElementById('appContainer');
             container.innerHTML = `
                 <div class="flex-1 flex flex-col lg:flex-row h-full bg-gradient-to-br from-indigo-900 via-blue-900 to-purple-900 overflow-y-auto">
@@ -2275,7 +2272,7 @@
                             ${activeExamBanner}
                         </div>
                         <div class="mt-8 pt-4 border-t border-indigo-800/60 flex flex-wrap items-center justify-between gap-2 text-xs text-indigo-300">
-                            <div><i class="fa-solid fa-database text-cyan-400 mr-1"></i> Terhubung ke Supabase PostgreSQL &amp; Auth</div>
+                            <div><i class="fa-solid fa-database text-cyan-400 mr-1"></i> ${IS_PREVIEW ? 'Mode Uji Coba Lokal (IS_PREVIEW = true)' : 'Terhubung ke Supabase PostgreSQL & Auth'}</div>
                             <div>Versi ${APP_VERSION}</div>
                         </div>
                     </div>
@@ -2286,6 +2283,8 @@
                                 <h3 class="text-2xl font-extrabold text-slate-900">Masuk Aplikasi</h3>
                                 <p class="text-slate-500 text-xs mt-1">Siswa via Tabel Database • Admin via Supabase Auth</p>
                             </div>
+
+                            ${previewBadgeHtml}
 
                             <div class="flex bg-slate-100 p-1.5 rounded-2xl mb-6">
                                 <button type="button" onclick="window.switchLoginTab('student')" id="tabStudentBtn" class="flex-1 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition shadow-sm bg-indigo-600 text-white cursor-pointer">
@@ -2405,7 +2404,7 @@
             try {
                 let matchedStudent = null;
 
-                if (!isEffectivePreviewMode() && supabase) {
+                if (!IS_PREVIEW && supabase) {
                     const { data: rows, error } = await supabase
                         .from('students')
                         .select('*')
@@ -2513,7 +2512,7 @@
             }
 
             try {
-                if (isEffectivePreviewMode() || !supabase) {
+                if (IS_PREVIEW || !supabase) {
                     showLoginError('Gunakan tombol Quick Login Preview atau aktifkan Supabase (IS_PREVIEW = false).');
                     return;
                 }
@@ -2634,7 +2633,7 @@
             if (wasStudent) {
                 await window.releaseStudentLoginLock(appData.currentUser.studentId);
             }
-            if (wasStaff && !isEffectivePreviewMode() && supabase) {
+            if (wasStaff && !IS_PREVIEW && supabase) {
                 try {
                     await supabase.auth.signOut();
                 } catch (e) {}
@@ -2778,7 +2777,7 @@
                             </div>
                             <div class="flex items-center gap-2 shrink-0">
                                 <div class="live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[10px] sm:text-[11px] font-bold flex items-center gap-1.5 transition-all">
-                                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${isEffectivePreviewMode() ? 'Preview' : 'Supabase Live'}</span>
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview' : 'Supabase Live'}</span>
                                 </div>
                                 <button type="button" onclick="window.logoutApp()" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
                                     <i class="fa-solid fa-right-from-bracket"></i> <span class="hidden sm:inline">Logout</span>
@@ -2924,7 +2923,7 @@
             if (isFetchingStudentsFromCloud) return;
             isFetchingStudentsFromCloud = true;
             try {
-                if (!isEffectivePreviewMode() && supabase) {
+                if (!IS_PREVIEW && supabase) {
                     updateLiveSyncIndicator('syncing', 'Memuat Data Siswa...');
                     const { data, error } = await supabase.from('students').select('*');
                     if (error) throw error;
@@ -3840,7 +3839,7 @@
 
         async function verifyExamEligibilityFromServer(examId, student) {
             let targetExam = appData.exams.find(e => e.id === examId) || null;
-            if (!isEffectivePreviewMode() && supabase && examId) {
+            if (!IS_PREVIEW && supabase && examId) {
                 const cloudExam = await fetchSingleRecordFromDb('exams', examId);
                 if (cloudExam) {
                     targetExam = cloudExam;
@@ -5092,7 +5091,7 @@
             registerDynamicServiceWorker();
 
             const restoreStaffIfValid = async () => {
-                if (!isEffectivePreviewMode() && supabase) {
+                if (!IS_PREVIEW && supabase) {
                     const { data: { session } } = await supabase.auth.getSession();
                     if (!session?.user) {
                         window.clearStaffSession();
