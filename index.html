@@ -6584,6 +6584,14 @@
             window.showModal(caption || 'Pratinjau Gambar', '', 'info', null, { html, wide: true, okText: 'Tutup Gambar' });
         };
 
+        window.toggleMobileQuestionNavDrawer = function(openState) {
+            const drawer = document.getElementById('mobileQuestionNavDrawer');
+            if (!drawer) return;
+            const shouldOpen = openState !== undefined ? Boolean(openState) : drawer.classList.contains('hidden');
+            drawer.classList.toggle('hidden', !shouldOpen);
+            drawer.classList.toggle('flex', shouldOpen);
+        };
+
         window.renderExamWorkspace = function() {
             const container = document.getElementById('appContainer');
             const student = appData.currentUser;
@@ -6607,7 +6615,7 @@
                 } else if (isAns) {
                     cls = 'bg-blue-600 text-white border border-blue-700 font-bold';
                 }
-                return `<button type="button" onclick="window.jumpToQuestion(${idx})" class="h-10 sm:h-9 w-full rounded-xl text-xs font-semibold flex items-center justify-center transition cursor-pointer ${cls}">${idx + 1}</button>`;
+                return `<button type="button" onclick="window.toggleMobileQuestionNavDrawer(false); window.jumpToQuestion(${idx})" class="h-10 sm:h-9 w-full rounded-xl text-xs font-semibold flex items-center justify-center transition cursor-pointer ${cls}">${idx + 1}</button>`;
             }).join('');
 
             let answerHtml = '';
@@ -6783,48 +6791,48 @@
                         </div>
                     </header>
 
+                    <!-- Bar Nomor Soal Tetap di Atas Khusus Tampilan HP (Mobile) -->
+                    <div class="lg:hidden bg-white border-b border-slate-200 px-3.5 py-2 flex items-center justify-between gap-2 shrink-0 shadow-2xs z-10">
+                        <div class="flex items-center gap-1.5 min-w-0">
+                            <span class="px-3 py-1 rounded-full bg-blue-600 text-white text-xs font-bold shadow-2xs shrink-0">Soal No. ${currentQuestionIndex + 1} / ${currentExamQuestions.length}</span>
+                            <span class="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-semibold truncate">${escapeHtml(getQuestionTypeBadgeLabel(q.type))}</span>
+                        </div>
+                        <button type="button" onclick="window.toggleMobileQuestionNavDrawer(true)" class="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer">
+                            <i class="fa-solid fa-border-all"></i>
+                            <span>Daftar (<strong id="mobileAnsweredCounterText">${answeredTotal}</strong>/${currentExamQuestions.length})</span>
+                        </button>
+                    </div>
+
+                    <!-- Popup / Drawer Penjelajah Nomor Soal Khusus HP -->
+                    <div id="mobileQuestionNavDrawer" onclick="if(event.target===this) window.toggleMobileQuestionNavDrawer(false)" class="fixed inset-0 z-[1000000] hidden items-end sm:items-center justify-center bg-slate-950/60 backdrop-blur-xs p-3 lg:hidden">
+                        <div class="bg-white rounded-3xl w-full max-w-md p-4 shadow-2xl border border-slate-200 space-y-3 max-h-[82vh] flex flex-col">
+                            <div class="flex items-center justify-between border-b border-slate-100 pb-2.5 shrink-0">
+                                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-2"><i class="fa-solid fa-border-all text-blue-600"></i> Penjelajah Nomor Soal</h3>
+                                <button type="button" onclick="window.toggleMobileQuestionNavDrawer(false)" class="w-8 h-8 rounded-full bg-slate-100 text-slate-700 font-bold text-base cursor-pointer">&times;</button>
+                            </div>
+                            <div class="flex items-center justify-between gap-2 text-[11px] text-slate-600 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/70 shrink-0">
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block"></span> Dijawab (${answeredTotal})</span>
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span> Ragu (${doubtfulTotal})</span>
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-slate-300 inline-block"></span> Belum (${currentExamQuestions.length - answeredTotal})</span>
+                            </div>
+                            <div class="overflow-y-auto custom-scrollbar flex-1 py-1">
+                                <div class="grid grid-cols-5 gap-2">
+                                    ${gridNav}
+                                </div>
+                            </div>
+                            <div class="pt-2 border-t border-slate-100 flex items-center gap-2 shrink-0">
+                                <button type="button" onclick="window.toggleMobileQuestionNavDrawer(false)" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-bold text-xs cursor-pointer">Tutup</button>
+                                <button type="button" onclick="window.toggleMobileQuestionNavDrawer(false); window.confirmSubmitExam()" class="flex-1 py-2.5 bg-[#108963] hover:bg-[#0d7453] text-white rounded-2xl font-bold text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-paper-plane"></i> Kirim &amp; Selesai
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Konten 3 Kolom: Stimulus | Soal & Jawaban | Penjelajah Soal -->
                     <div class="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-12 overflow-y-auto lg:overflow-hidden custom-scrollbar bg-white">
                         <!-- KOLOM KIRI: PANEL STIMULUS & INFORMASI -->
-                        <section class="lg:col-span-5 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
-                            <div class="px-5 py-3.5 border-b border-slate-100 shrink-0">
-                                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-                                    <i class="fa-solid fa-book-open text-blue-600"></i> PANEL STIMULUS &amp; INFORMASI
-                                </h3>
-                            </div>
-                            <div class="p-5 flex-1 lg:overflow-y-auto custom-scrollbar space-y-4">
-                                ${hasStimulusText ? `
-                                    <div class="p-5 rounded-2xl bg-[#FFFDF7] border border-amber-200/90 text-slate-800 text-[14.5px] sm:text-[15px] leading-relaxed">
-                                        ${formatStimulusTextWithBoldLead(q.stimulusText)}
-                                    </div>
-                                ` : ''}
-                                ${hasStimulusImg ? `
-                                    <div class="rounded-2xl border border-amber-200/90 bg-[#FFFDF7] p-3.5 space-y-2">
-                                        <img src="${escapeHtml(q.stimulusImage)}" alt="Stimulus" onclick="window.previewZoomImage('${escapeHtml(q.stimulusImage)}', 'Gambar Stimulus Soal Nomor ${currentQuestionIndex + 1}')" class="w-full max-h-80 object-contain rounded-xl bg-white mx-auto cursor-zoom-in border border-slate-100 p-1">
-                                    </div>
-                                ` : ''}
-                                ${(!hasStimulusText && !hasStimulusImg) ? `
-                                    <div class="p-6 rounded-2xl bg-[#FFFDF7] border border-dashed border-amber-200 text-center space-y-1.5">
-                                        <i class="fa-regular fa-file-lines text-amber-400 text-2xl"></i>
-                                        <p class="text-sm font-semibold text-slate-700">Tidak Ada Wacana / Gambar Stimulus</p>
-                                        <p class="text-xs text-slate-500">Perhatikan langsung pertanyaan pada panel tengah untuk menjawab soal.</p>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        </section>
-
-                        <!-- KOLOM TENGAH: PERTANYAAN & PILIHAN JAWABAN -->
-                        <section class="lg:col-span-5 bg-slate-50/40 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
-                            <div class="px-5 py-3.5 border-b border-slate-100 bg-white flex flex-wrap items-center justify-between gap-2 shrink-0">
-                                <div class="flex items-center gap-2">
-                                    <span class="px-4 py-1.5 rounded-full bg-blue-600 text-white text-xs sm:text-sm font-semibold shadow-2xs">Soal Nomor ${currentQuestionIndex + 1}</span>
-                                    <span class="px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs sm:text-sm font-medium">${escapeHtml(getQuestionTypeBadgeLabel(q.type))}</span>
-                                </div>
-                                <span class="px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs sm:text-sm font-semibold flex items-center gap-1.5">
-                                    <i class="fa-solid fa-star text-amber-400"></i> Bobot: ${q.weight} Poin
-                                </span>
-                            </div>
-
+                        <section class="lg:col-span-5 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden ${(!hasStimulusText && !hasStimulusImg) ? 'hidden lg:flex' : 'flex'}">
                             <div class="p-5 flex-1 lg:overflow-y-auto custom-scrollbar space-y-4">
                                 <div class="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
                                     <div class="text-[16px] sm:text-[17px] text-slate-900 leading-relaxed font-normal">
@@ -6895,11 +6903,11 @@
 
         window.saveAnswer = function(qId, val) {
             currentStudentAnswers[qId] = val;
+            const count = currentExamQuestions.filter(item => isQuestionAnswered(currentStudentAnswers[item.id])).length;
             const answeredEl = document.getElementById('answeredCounterText');
-            if (answeredEl) {
-                const count = currentExamQuestions.filter(item => isQuestionAnswered(currentStudentAnswers[item.id])).length;
-                answeredEl.innerText = String(count);
-            }
+            if (answeredEl) answeredEl.innerText = String(count);
+            const mobileAnsweredEl = document.getElementById('mobileAnsweredCounterText');
+            if (mobileAnsweredEl) mobileAnsweredEl.innerText = String(count);
             window.scheduleAutoSave(false);
         };
 
