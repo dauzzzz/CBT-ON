@@ -116,24 +116,39 @@
                 display: none !important;
             }
             #adminMainContent {
-                padding-bottom: 5.5rem !important;
+                padding: 0.75rem 0.75rem 5.5rem 0.75rem !important;
+                overflow-x: hidden;
             }
             #mobileFloatingBottomNav {
                 display: flex !important;
                 position: fixed;
-                bottom: 0.75rem;
-                left: 0.75rem;
-                right: 0.75rem;
-                z-index: 60;
-                background: rgba(15, 23, 42, 0.92);
+                bottom: 0.65rem;
+                left: 0.65rem;
+                right: 0.65rem;
+                z-index: 999999;
+                background: rgba(15, 23, 42, 0.95);
                 backdrop-filter: blur(16px);
                 -webkit-backdrop-filter: blur(16px);
                 border: 1px solid rgba(255, 255, 255, 0.16);
                 border-radius: 1.25rem;
-                padding: 0.35rem 0.5rem;
-                box-shadow: 0 18px 35px -8px rgba(2, 6, 23, 0.55);
+                padding: 0.3rem 0.35rem;
+                box-shadow: 0 18px 35px -8px rgba(2, 6, 23, 0.6);
                 justify-content: space-around;
                 align-items: center;
+                gap: 0.15rem;
+            }
+            #mobileFloatingBottomNav button {
+                flex: 1 1 0%;
+                min-width: 0;
+                padding: 0.35rem 0.2rem !important;
+                min-height: 42px;
+            }
+            #mobileFloatingBottomNav button span {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 100%;
+                font-size: 9.5px;
             }
             button, select, input[type="text"], input[type="number"], input[type="password"], input[type="email"] {
                 min-height: 38px;
@@ -2778,7 +2793,7 @@
                     </div>
 
                     <!-- Floating Bottom Navigation Bar (Khusus Mobile / HP) -->
-                    <nav id="mobileFloatingBottomNav" aria-label="Navigasi Cepat Mobile">
+                    <nav id="mobileFloatingBottomNav" class="z-[999999]" aria-label="Navigasi Cepat Mobile">
                         ${bottomNavHtml}
                     </nav>
                 </div>
@@ -2835,52 +2850,74 @@
         // RENDERER MENU ADMIN (DASHBOARD, MASTER DATA, BANK SOAL, UJIAN, HASIL, ANALISIS)
         // ============================================================================
         function renderDashboardContent(container) {
+            const activeExamCount = appData.exams.filter(x => x.status === 'Aktif').length;
+            const totalResultCount = getValidExamResults('ALL').length;
             container.innerHTML = `
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                    <div class="glass-panel p-5 rounded-2xl shadow-xs">
-                        <p class="text-xs font-bold text-slate-400 uppercase">Total Siswa</p>
-                        <h3 class="text-2xl font-extrabold text-slate-900 mt-1">${appData.students.length}</h3>
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5">
+                    <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Total Siswa</p>
+                            <h3 class="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">${appData.students.length}</h3>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
+                            <i class="fa-solid fa-users"></i>
+                        </div>
                     </div>
-                    <div class="glass-panel p-5 rounded-2xl shadow-xs">
-                        <p class="text-xs font-bold text-slate-400 uppercase">Total Guru</p>
-                        <h3 class="text-2xl font-extrabold text-slate-900 mt-1">${appData.teachers.length}</h3>
+                    <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Total Guru</p>
+                            <h3 class="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">${appData.teachers.length}</h3>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
+                            <i class="fa-solid fa-chalkboard-user"></i>
+                        </div>
                     </div>
-                    <div class="glass-panel p-5 rounded-2xl shadow-xs">
-                        <p class="text-xs font-bold text-slate-400 uppercase">Butir Soal</p>
-                        <h3 class="text-2xl font-extrabold text-indigo-600 mt-1">${appData.questions.length}</h3>
+                    <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Butir Soal</p>
+                            <h3 class="text-xl sm:text-2xl font-extrabold text-indigo-600 mt-1">${appData.questions.length}</h3>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
+                            <i class="fa-solid fa-layer-group"></i>
+                        </div>
                     </div>
-                    <div class="glass-panel p-5 rounded-2xl shadow-xs">
-                        <p class="text-xs font-bold text-slate-400 uppercase">Ujian Aktif</p>
-                        <h3 class="text-2xl font-extrabold text-emerald-600 mt-1">${appData.exams.filter(x => x.status === 'Aktif').length}</h3>
+                    <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Ujian Aktif</p>
+                            <h3 class="text-xl sm:text-2xl font-extrabold text-emerald-600 mt-1">${activeExamCount}</h3>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
+                            <i class="fa-solid fa-file-circle-check"></i>
+                        </div>
                     </div>
                 </div>
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div class="lg:col-span-2 glass-panel p-5 rounded-2xl shadow-xs">
-                        <h3 class="font-bold text-sm text-slate-800 mb-4"><i class="fa-solid fa-bolt text-indigo-600 mr-1.5"></i> Pintasan Menu Cepat</h3>
-                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                            <button type="button" onclick="window.switchAdminMenu('students')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-users text-indigo-600 text-base mb-1"></i>
-                                <p class="text-xs font-bold text-slate-800">Data Siswa</p>
-                                <p class="text-[10px] text-slate-500">${appData.students.length} Terdaftar</p>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+                    <div class="lg:col-span-2 glass-panel p-4 sm:p-5 rounded-2xl shadow-xs">
+                        <h3 class="font-bold text-sm text-slate-800 mb-3 sm:mb-4"><i class="fa-solid fa-bolt text-indigo-600 mr-1.5"></i> Pintasan Menu Cepat</h3>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+                            <button type="button" onclick="window.switchAdminMenu('students')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-users text-indigo-600 text-base mb-1.5 block"></i>
+                                <p class="text-xs font-bold text-slate-800 truncate">Data Siswa</p>
+                                <p class="text-[10px] text-slate-500 truncate">${appData.students.length} Terdaftar</p>
                             </button>
-                            <button type="button" onclick="window.switchAdminMenu('questionBanks')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-layer-group text-purple-600 text-base mb-1"></i>
-                                <p class="text-xs font-bold text-slate-800">Bank Soal</p>
-                                <p class="text-[10px] text-slate-500">${appData.questions.length} Soal</p>
+                            <button type="button" onclick="window.switchAdminMenu('questionBanks')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-layer-group text-purple-600 text-base mb-1.5 block"></i>
+                                <p class="text-xs font-bold text-slate-800 truncate">Bank Soal</p>
+                                <p class="text-[10px] text-slate-500 truncate">${appData.questions.length} Soal</p>
                             </button>
-                            <button type="button" onclick="window.switchAdminMenu('exams')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-file-signature text-emerald-600 text-base mb-1"></i>
-                                <p class="text-xs font-bold text-slate-800">Kelola Ujian</p>
-                                <p class="text-[10px] text-slate-500">${appData.exams.length} Paket</p>
+                            <button type="button" onclick="window.switchAdminMenu('exams')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-file-signature text-emerald-600 text-base mb-1.5 block"></i>
+                                <p class="text-xs font-bold text-slate-800 truncate">Kelola Ujian</p>
+                                <p class="text-[10px] text-slate-500 truncate">${appData.exams.length} Paket</p>
                             </button>
-                            <button type="button" onclick="window.switchAdminMenu('results')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-award text-amber-600 text-base mb-1"></i>
-                                <p class="text-xs font-bold text-slate-800">Hasil &amp; Koreksi</p>
-                                <p class="text-[10px] text-slate-500">${getValidExamResults('ALL').length} Rekap</p>
+                            <button type="button" onclick="window.switchAdminMenu('results')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-award text-amber-600 text-base mb-1.5 block"></i>
+                                <p class="text-xs font-bold text-slate-800 truncate">Hasil &amp; Koreksi</p>
+                                <p class="text-[10px] text-slate-500 truncate">${totalResultCount} Rekap</p>
                             </button>
                         </div>
                     </div>
-                    <div class="glass-panel p-5 rounded-2xl shadow-xs">
+                    <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs">
                         <h3 class="font-bold text-sm text-slate-800 mb-3"><i class="fa-solid fa-clock-rotate-left text-indigo-600 mr-1.5"></i> Aktivitas Terbaru</h3>
                         <div class="space-y-2.5 max-h-48 overflow-y-auto custom-scrollbar">
                             ${appData.activityLogs.map(l => `<div class="text-xs border-b border-slate-100 pb-2"><span class="font-mono text-[10px] text-indigo-600 font-bold">${escapeHtml(l.time)}</span><p class="text-slate-700 mt-0.5">${escapeHtml(l.text)}</p></div>`).join('') || '<p class="text-xs text-slate-400">Belum ada aktivitas.</p>'}
