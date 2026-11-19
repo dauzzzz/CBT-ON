@@ -2,7 +2,7 @@
 <html lang="id" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#4f46e5">
     <title>CBT SEKOLAH – SISTEM UJIAN DIGITAL (SUPABASE)</title>
     <link id="dynamicFavicon" rel="icon" type="image/png" href="https://placehold.co/100x100/4f46e5/ffffff?text=SDN">
@@ -62,6 +62,7 @@
             z-index: 999999;
             width: 100vw;
             height: 100vh;
+            height: 100dvh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -116,32 +117,32 @@
                 display: none !important;
             }
             #adminMainContent {
-                padding: 0.75rem 0.75rem 5.5rem 0.75rem !important;
+                padding: 0.75rem 0.75rem calc(5.75rem + env(safe-area-inset-bottom, 0px)) 0.75rem !important;
                 overflow-x: hidden;
             }
             #mobileFloatingBottomNav {
                 display: flex !important;
                 position: fixed;
-                bottom: 0.65rem;
+                bottom: calc(0.6rem + env(safe-area-inset-bottom, 0px));
                 left: 0.65rem;
                 right: 0.65rem;
                 z-index: 999999;
-                background: rgba(15, 23, 42, 0.95);
+                background: rgba(15, 23, 42, 0.96);
                 backdrop-filter: blur(16px);
                 -webkit-backdrop-filter: blur(16px);
                 border: 1px solid rgba(255, 255, 255, 0.16);
                 border-radius: 1.25rem;
-                padding: 0.3rem 0.35rem;
-                box-shadow: 0 18px 35px -8px rgba(2, 6, 23, 0.6);
+                padding: 0.35rem 0.4rem;
+                box-shadow: 0 18px 35px -8px rgba(2, 6, 23, 0.65);
                 justify-content: space-around;
                 align-items: center;
-                gap: 0.15rem;
+                gap: 0.2rem;
             }
             #mobileFloatingBottomNav button {
                 flex: 1 1 0%;
                 min-width: 0;
-                padding: 0.35rem 0.2rem !important;
-                min-height: 42px;
+                padding: 0.4rem 0.2rem !important;
+                min-height: 44px;
             }
             #mobileFloatingBottomNav button span {
                 white-space: nowrap;
@@ -149,6 +150,7 @@
                 text-overflow: ellipsis;
                 max-width: 100%;
                 font-size: 9.5px;
+                line-height: 1.15;
             }
             button, select, input[type="text"], input[type="number"], input[type="password"], input[type="email"] {
                 min-height: 38px;
@@ -2695,8 +2697,16 @@
             { id: 'students', label: 'Siswa', icon: 'fa-users' },
             { id: 'questionBanks', label: 'Bank Soal', icon: 'fa-layer-group' },
             { id: 'exams', label: 'Ujian', icon: 'fa-file-signature' },
-            { id: 'results', label: 'Hasil', icon: 'fa-award' }
+            { id: '__more__', label: 'Menu Lain', icon: 'fa-bars' }
         ];
+
+        window.toggleMobileMoreMenu = function(forceState) {
+            const drawer = document.getElementById('mobileMoreMenuDrawer');
+            if (!drawer) return;
+            const shouldOpen = forceState !== undefined ? Boolean(forceState) : drawer.classList.contains('hidden');
+            drawer.classList.toggle('hidden', !shouldOpen);
+            drawer.classList.toggle('flex', shouldOpen);
+        };
 
         window.renderAdminLayout = function() {
             updateBrowserFaviconAndTitle();
@@ -2733,12 +2743,33 @@
                 ? MOBILE_BOTTOM_TABS
                 : [{ id: 'questionBanks', label: 'Bank Soal', icon: 'fa-layer-group' }];
 
+            const primaryMobileIds = new Set(['dashboard', 'students', 'questionBanks', 'exams']);
+            const isOtherMenuActive = isFullAdmin && !primaryMobileIds.has(appData.activeAdminMenu);
+
             const bottomNavHtml = bottomNavItems.map(item => {
+                if (item.id === '__more__') {
+                    return `
+                        <button type="button" onclick="window.toggleMobileMoreMenu()" class="flex flex-col items-center justify-center py-1.5 px-2 rounded-xl text-[10px] font-bold transition cursor-pointer ${isOtherMenuActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-300 hover:text-white'}">
+                            <i class="fa-solid ${item.icon} text-sm mb-0.5"></i>
+                            <span>${escapeHtml(item.label)}</span>
+                        </button>
+                    `;
+                }
                 const isActive = appData.activeAdminMenu === item.id;
                 return `
-                    <button type="button" onclick="window.switchAdminMenu('${item.id}')" class="flex flex-col items-center justify-center py-1.5 px-3 rounded-xl text-[10px] font-bold transition cursor-pointer ${isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-300 hover:text-white'}">
+                    <button type="button" onclick="window.switchAdminMenu('${item.id}')" class="flex flex-col items-center justify-center py-1.5 px-2 rounded-xl text-[10px] font-bold transition cursor-pointer ${isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-300 hover:text-white'}">
                         <i class="fa-solid ${item.icon} text-sm mb-0.5"></i>
                         <span>${escapeHtml(item.label)}</span>
+                    </button>
+                `;
+            }).join('');
+
+            const mobileDrawerItemsHtml = visibleMenus.map(m => {
+                const active = appData.activeAdminMenu === m.id;
+                return `
+                    <button type="button" onclick="window.toggleMobileMoreMenu(false); window.switchAdminMenu('${m.id}')" class="flex items-center gap-2.5 p-3 rounded-2xl text-xs font-bold border transition cursor-pointer text-left ${active ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50'}">
+                        <i class="fa-solid ${m.icon} w-4 text-center shrink-0"></i>
+                        <span class="truncate">${escapeHtml(m.label)}</span>
                     </button>
                 `;
             }).join('');
@@ -2772,24 +2803,42 @@
                     </aside>
 
                     <div class="flex-1 flex flex-col h-full overflow-hidden bg-slate-50/90 w-full">
-                        <header class="glass-panel border-b border-slate-200/80 px-4 sm:px-6 py-3 flex items-center justify-between gap-2 shrink-0">
-                            <div class="flex items-center gap-3 min-w-0">
+                        <header class="glass-panel border-b border-slate-200/80 px-3.5 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2 shrink-0">
+                            <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
                                 <img src="${escapeHtml(currentLogo)}" onerror="this.src='${DEFAULT_SCHOOL_LOGO}'" alt="Logo" class="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5 shrink-0">
                                 <div class="min-w-0">
                                     <h1 class="text-sm sm:text-base font-extrabold text-slate-900 truncate">${escapeHtml(activeMenuObj.label)}</h1>
                                     <p class="text-[10px] sm:text-[11px] text-slate-500 truncate">${escapeHtml(appData.settings.schoolName)}</p>
                                 </div>
                             </div>
-                            <div class="flex items-center gap-2 shrink-0">
+                            <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                                 <div class="live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[10px] sm:text-[11px] font-bold flex items-center gap-1.5 transition-all">
                                     <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview' : 'Supabase Live'}</span>
                                 </div>
-                                <button type="button" onclick="window.logoutApp()" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
+                                <button type="button" onclick="window.logoutApp()" class="px-2.5 sm:px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
                                     <i class="fa-solid fa-right-from-bracket"></i> <span class="hidden sm:inline">Logout</span>
                                 </button>
                             </div>
                         </header>
                         <main id="adminMainContent" class="flex-1 p-3 sm:p-6 overflow-y-auto custom-scrollbar"></main>
+                    </div>
+
+                    <!-- Bottom-Sheet Drawer Menu Lain (Khusus Mobile / HP) -->
+                    <div id="mobileMoreMenuDrawer" onclick="if(event.target===this) window.toggleMobileMoreMenu(false)" class="fixed inset-0 z-[1000000] hidden items-end justify-center bg-slate-950/60 backdrop-blur-xs p-3 md:hidden">
+                        <div class="bg-white rounded-3xl w-full max-w-md p-4 shadow-2xl border border-slate-200 space-y-3 max-h-[78vh] flex flex-col" style="margin-bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));">
+                            <div class="flex items-center justify-between border-b border-slate-100 pb-2.5 shrink-0">
+                                <h3 class="text-xs font-extrabold uppercase tracking-wider text-slate-800 flex items-center gap-2"><i class="fa-solid fa-grip text-indigo-600"></i> Semua Menu Admin</h3>
+                                <button type="button" onclick="window.toggleMobileMoreMenu(false)" class="w-8 h-8 rounded-full bg-slate-100 text-slate-700 font-bold text-base cursor-pointer">&times;</button>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 overflow-y-auto custom-scrollbar flex-1 py-0.5">
+                                ${mobileDrawerItemsHtml}
+                            </div>
+                            <div class="pt-2 border-t border-slate-100 shrink-0">
+                                <button type="button" onclick="window.toggleMobileMoreMenu(false); window.logoutApp()" class="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-power-off"></i> Keluar / Logout
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Floating Bottom Navigation Bar (Khusus Mobile / HP) -->
@@ -2847,20 +2896,19 @@
         };
 
         // ============================================================================
-        // RENDERER MENU ADMIN (DASHBOARD, MASTER DATA, BANK SOAL, UJIAN, HASIL, ANALISIS)
+        // DASHBOARD & HELPER DATA SISWA
         // ============================================================================
         function renderDashboardContent(container) {
-            const activeExamCount = appData.exams.filter(x => x.status === 'Aktif').length;
-            const totalResultCount = getValidExamResults('ALL').length;
+            const activeExamCount = appData.exams.filter(x => isExamStrictlyActive(x)).length;
             container.innerHTML = `
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5">
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5 sm:mb-6">
                     <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
                         <div class="min-w-0">
                             <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Total Siswa</p>
                             <h3 class="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">${appData.students.length}</h3>
                         </div>
-                        <div class="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
-                            <i class="fa-solid fa-users"></i>
+                        <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                            <i class="fa-solid fa-users text-base"></i>
                         </div>
                     </div>
                     <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
@@ -2868,8 +2916,8 @@
                             <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Total Guru</p>
                             <h3 class="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">${appData.teachers.length}</h3>
                         </div>
-                        <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
-                            <i class="fa-solid fa-chalkboard-user"></i>
+                        <div class="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+                            <i class="fa-solid fa-chalkboard-user text-base"></i>
                         </div>
                     </div>
                     <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
@@ -2877,8 +2925,8 @@
                             <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Butir Soal</p>
                             <h3 class="text-xl sm:text-2xl font-extrabold text-indigo-600 mt-1">${appData.questions.length}</h3>
                         </div>
-                        <div class="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
-                            <i class="fa-solid fa-layer-group"></i>
+                        <div class="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                            <i class="fa-solid fa-layer-group text-base"></i>
                         </div>
                     </div>
                     <div class="glass-panel p-4 sm:p-5 rounded-2xl shadow-xs flex items-center justify-between gap-2">
@@ -2886,34 +2934,34 @@
                             <p class="text-[10px] sm:text-xs font-bold text-slate-400 uppercase truncate">Ujian Aktif</p>
                             <h3 class="text-xl sm:text-2xl font-extrabold text-emerald-600 mt-1">${activeExamCount}</h3>
                         </div>
-                        <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 text-sm sm:text-base">
-                            <i class="fa-solid fa-file-circle-check"></i>
+                        <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                            <i class="fa-solid fa-file-signature text-base"></i>
                         </div>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
                     <div class="lg:col-span-2 glass-panel p-4 sm:p-5 rounded-2xl shadow-xs">
-                        <h3 class="font-bold text-sm text-slate-800 mb-3 sm:mb-4"><i class="fa-solid fa-bolt text-indigo-600 mr-1.5"></i> Pintasan Menu Cepat</h3>
-                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
-                            <button type="button" onclick="window.switchAdminMenu('students')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-users text-indigo-600 text-base mb-1.5 block"></i>
-                                <p class="text-xs font-bold text-slate-800 truncate">Data Siswa</p>
-                                <p class="text-[10px] text-slate-500 truncate">${appData.students.length} Terdaftar</p>
+                        <h3 class="font-bold text-sm text-slate-800 mb-3.5"><i class="fa-solid fa-bolt text-indigo-600 mr-1.5"></i> Pintasan Menu Cepat</h3>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <button type="button" onclick="window.switchAdminMenu('students')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-users text-indigo-600 text-base mb-1"></i>
+                                <p class="text-xs font-bold text-slate-800">Data Siswa</p>
+                                <p class="text-[10px] text-slate-500">${appData.students.length} Terdaftar</p>
                             </button>
-                            <button type="button" onclick="window.switchAdminMenu('questionBanks')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-layer-group text-purple-600 text-base mb-1.5 block"></i>
-                                <p class="text-xs font-bold text-slate-800 truncate">Bank Soal</p>
-                                <p class="text-[10px] text-slate-500 truncate">${appData.questions.length} Soal</p>
+                            <button type="button" onclick="window.switchAdminMenu('questionBanks')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-layer-group text-purple-600 text-base mb-1"></i>
+                                <p class="text-xs font-bold text-slate-800">Bank Soal</p>
+                                <p class="text-[10px] text-slate-500">${appData.questions.length} Soal</p>
                             </button>
-                            <button type="button" onclick="window.switchAdminMenu('exams')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-file-signature text-emerald-600 text-base mb-1.5 block"></i>
-                                <p class="text-xs font-bold text-slate-800 truncate">Kelola Ujian</p>
-                                <p class="text-[10px] text-slate-500 truncate">${appData.exams.length} Paket</p>
+                            <button type="button" onclick="window.switchAdminMenu('exams')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-file-signature text-emerald-600 text-base mb-1"></i>
+                                <p class="text-xs font-bold text-slate-800">Kelola Ujian</p>
+                                <p class="text-[10px] text-slate-500">${appData.exams.length} Paket</p>
                             </button>
-                            <button type="button" onclick="window.switchAdminMenu('results')" class="p-3 bg-white/90 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
-                                <i class="fa-solid fa-award text-amber-600 text-base mb-1.5 block"></i>
-                                <p class="text-xs font-bold text-slate-800 truncate">Hasil &amp; Koreksi</p>
-                                <p class="text-[10px] text-slate-500 truncate">${totalResultCount} Rekap</p>
+                            <button type="button" onclick="window.switchAdminMenu('results')" class="p-3 bg-white/80 hover:bg-indigo-50 rounded-xl border border-slate-200 text-left transition cursor-pointer">
+                                <i class="fa-solid fa-award text-amber-600 text-base mb-1"></i>
+                                <p class="text-xs font-bold text-slate-800">Hasil &amp; Koreksi</p>
+                                <p class="text-[10px] text-slate-500">${getValidExamResults('ALL').length} Rekap</p>
                             </button>
                         </div>
                     </div>
@@ -2974,6 +3022,209 @@
             } finally {
                 isFetchingStudentsFromCloud = false;
             }
+        };
+
+        // ============================================================================
+        // CETAK KARTU UJIAN LENGKAP & MENARIK
+        // ============================================================================
+        let examCardConfigCache = {
+            examTitle: 'KARTU PESERTA UJIAN SEKOLAH / SUMATIF AKHIR SEMESTER (SAS)',
+            examSubtitle: 'PELAKSANAAN ASESMEN BERBASIS KOMPUTER (CBT)',
+            academicYear: '',
+            roomName: 'Ruang 01 (Lab Komputer / Ruang Kelas)',
+            sessionInfo: 'Sesi 1 (07.30 - 09.30 WIB)',
+            defaultPinDisplay: '123456',
+            paperSize: 'A4',
+            showScheduleTable: true,
+            scheduleText: '',
+            signCityDate: '',
+            signRole: 'Kepala Sekolah / Ketua Panitia,',
+            signName: '_______________________',
+            signNip: 'NIP. ...............................'
+        };
+
+        function buildDefaultScheduleLinesFromExams() {
+            if (!Array.isArray(appData.exams) || appData.exams.length === 0) {
+                return [
+                    'Senin | 07:30 - 09:00 WIB | Bahasa Indonesia',
+                    'Selasa | 07:30 - 09:00 WIB | Matematika',
+                    'Rabu | 07:30 - 09:00 WIB | IPAS / PPKn'
+                ].join('\n');
+            }
+            return appData.exams.map(ex => {
+                const subName = getSubjectNameById(ex.subjectId) || ex.examName;
+                const sDate = formatIsoToDDMMYYYY(parseDDMMYYYYToIso(ex.startDate) || getTodayIsoWIB());
+                const sTime = normalizeTimeHHMM(ex.startTime, '07:30');
+                const eTime = normalizeTimeHHMM(ex.endTime, '09:30');
+                return `${sDate} | ${sTime} - ${eTime} WIB | ${ex.examName} (${subName})`;
+            }).join('\n');
+        }
+
+        window.pullScheduleFromActiveExamsToCard = function() {
+            const el = document.getElementById('cardCfgScheduleText');
+            if (el) el.value = buildDefaultScheduleLinesFromExams();
+        };
+
+        window.openPrintExamCardsModal = function() {
+            const filteredStudents = getFilteredStudentsList();
+            const selectedList = appData.students.filter(s => selectedStudentIds.has(String(s._docId || s.id)));
+            if (filteredStudents.length === 0 && selectedList.length === 0) {
+                window.showModal('Data Kosong', 'Belum ada data siswa yang bisa dicetak kartunya.', 'info');
+                return;
+            }
+            const defaultTargetMode = selectedList.length > 0 ? 'SELECTED' : 'FILTERED';
+
+            if (!examCardConfigCache.academicYear) {
+                examCardConfigCache.academicYear = `Tahun Pelajaran ${appData.settings.academicYear || '2026/2027'} • Semester ${appData.settings.semester || 'Ganjil'}`;
+            }
+            if (!examCardConfigCache.scheduleText) {
+                examCardConfigCache.scheduleText = buildDefaultScheduleLinesFromExams();
+            }
+            if (!examCardConfigCache.signCityDate) {
+                examCardConfigCache.signCityDate = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+            }
+
+            const html = `
+                <div class="space-y-4 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label class="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer">
+                            <input type="radio" name="cardPrintTargetMode" value="FILTERED" ${defaultTargetMode === 'FILTERED' ? 'checked' : ''} class="mt-0.5 text-indigo-600">
+                            <div><span class="font-extrabold text-slate-900 block">Cetak Siswa Sesuai Filter (${filteredStudents.length} Siswa)</span></div>
+                        </label>
+                        <label class="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50 ${selectedList.length === 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}">
+                            <input type="radio" name="cardPrintTargetMode" value="SELECTED" ${defaultTargetMode === 'SELECTED' ? 'checked' : ''} ${selectedList.length === 0 ? 'disabled' : ''} class="mt-0.5 text-indigo-600">
+                            <div><span class="font-extrabold text-slate-900 block">Hanya Siswa Terpilih (${selectedList.length} Dicentang)</span></div>
+                        </label>
+                    </div>
+                    <div class="space-y-3 border-t border-slate-200 pt-3">
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Judul Kartu Ujian *</label>
+                            <input type="text" id="cardCfgExamTitle" value="${escapeHtml(examCardConfigCache.examTitle)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold text-slate-800">
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div><label class="block font-bold text-slate-700 mb-1">Sub-Keterangan</label><input type="text" id="cardCfgExamSubtitle" value="${escapeHtml(examCardConfigCache.examSubtitle)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                            <div><label class="block font-bold text-slate-700 mb-1">Tahun Pelajaran &amp; Semester</label><input type="text" id="cardCfgAcademicYear" value="${escapeHtml(examCardConfigCache.academicYear)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div><label class="block font-bold text-slate-700 mb-1">Ruang Ujian</label><input type="text" id="cardCfgRoomName" value="${escapeHtml(examCardConfigCache.roomName)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold text-indigo-700"></div>
+                            <div><label class="block font-bold text-slate-700 mb-1">Sesi / Waktu</label><input type="text" id="cardCfgSessionInfo" value="${escapeHtml(examCardConfigCache.sessionInfo)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                            <div><label class="block font-bold text-slate-700 mb-1">PIN Default</label><input type="text" id="cardCfgPinDisplay" value="${escapeHtml(examCardConfigCache.defaultPinDisplay)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-bold text-emerald-700"></div>
+                        </div>
+                        <div>
+                            <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+                                <label class="inline-flex items-center gap-2 font-bold text-slate-700 cursor-pointer"><input type="checkbox" id="cardCfgShowSchedule" ${examCardConfigCache.showScheduleTable ? 'checked' : ''} class="w-4 h-4 rounded text-indigo-600"><span>Tampilkan Jadwal di Kartu</span></label>
+                                <button type="button" onclick="window.pullScheduleFromActiveExamsToCard()" class="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold cursor-pointer"><i class="fa-solid fa-calendar-check mr-1"></i> Ambil dari Jadwal Ujian</button>
+                            </div>
+                            <textarea id="cardCfgScheduleText" rows="3" class="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-[11px]">${escapeHtml(examCardConfigCache.scheduleText)}</textarea>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                            <div><label class="block font-bold text-slate-700 mb-1">Kertas</label><select id="cardCfgPaperSize" class="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold bg-white"><option value="A4" ${examCardConfigCache.paperSize === 'A4' ? 'selected' : ''}>A4</option><option value="F4" ${examCardConfigCache.paperSize === 'F4' ? 'selected' : ''}>F4 / Folio</option></select></div>
+                            <div><label class="block font-bold text-slate-700 mb-1">Tanggal TTD</label><input type="text" id="cardCfgSignDate" value="${escapeHtml(examCardConfigCache.signCityDate)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                            <div><label class="block font-bold text-slate-700 mb-1">Nama Pejabat</label><input type="text" id="cardCfgSignName" value="${escapeHtml(examCardConfigCache.signName)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                            <div><label class="block font-bold text-slate-700 mb-1">NIP</label><input type="text" id="cardCfgSignNip" value="${escapeHtml(examCardConfigCache.signNip)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            window.showModal('Cetak Kartu Peserta Ujian Siswa', '', 'info', (confirmed) => {
+                if (!confirmed) return true;
+                const targetModeEl = document.querySelector('input[name="cardPrintTargetMode"]:checked');
+                const targetMode = targetModeEl ? targetModeEl.value : 'FILTERED';
+                examCardConfigCache.examTitle = document.getElementById('cardCfgExamTitle')?.value.trim() || 'KARTU PESERTA UJIAN SEKOLAH';
+                examCardConfigCache.examSubtitle = document.getElementById('cardCfgExamSubtitle')?.value.trim() || '';
+                examCardConfigCache.academicYear = document.getElementById('cardCfgAcademicYear')?.value.trim() || '';
+                examCardConfigCache.roomName = document.getElementById('cardCfgRoomName')?.value.trim() || 'Ruang 01';
+                examCardConfigCache.sessionInfo = document.getElementById('cardCfgSessionInfo')?.value.trim() || 'Sesi 1';
+                examCardConfigCache.defaultPinDisplay = document.getElementById('cardCfgPinDisplay')?.value.trim() || '123456';
+                examCardConfigCache.paperSize = document.getElementById('cardCfgPaperSize')?.value || 'A4';
+                examCardConfigCache.showScheduleTable = Boolean(document.getElementById('cardCfgShowSchedule')?.checked);
+                examCardConfigCache.scheduleText = document.getElementById('cardCfgScheduleText')?.value.trim() || '';
+                examCardConfigCache.signCityDate = document.getElementById('cardCfgSignDate')?.value.trim() || '';
+                examCardConfigCache.signName = document.getElementById('cardCfgSignName')?.value.trim() || '_______________________';
+                examCardConfigCache.signNip = document.getElementById('cardCfgSignNip')?.value.trim() || '';
+
+                const studentsToPrint = targetMode === 'SELECTED' && selectedList.length > 0 ? selectedList : filteredStudents;
+                if (studentsToPrint.length === 0) return false;
+                setTimeout(() => window.executePrintStudentExamCards(studentsToPrint, examCardConfigCache), 60);
+                return true;
+            }, { html, wide: true, showCancel: true, okText: 'Buka Pratinjau & Cetak Kartu' });
+        };
+
+        window.executePrintStudentExamCards = function(studentsList, cfg) {
+            const logoSrc = appData.settings.schoolLogo || DEFAULT_SCHOOL_LOGO;
+            const defaultSchoolName = appData.settings.schoolName || 'SD NEGERI GEDONGBOYOUNTUNG';
+            const scheduleLines = (cfg.scheduleText || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            let scheduleTableHtml = '';
+            if (cfg.showScheduleTable && scheduleLines.length > 0) {
+                const sRows = scheduleLines.map(line => {
+                    const parts = line.split('|').map(p => p.trim());
+                    return parts.length >= 3
+                        ? `<tr><td style="border:1px solid #cbd5e1;padding:2px 4px;">${escapeHtml(parts[0])}</td><td style="border:1px solid #cbd5e1;padding:2px 4px;text-align:center;">${escapeHtml(parts[1])}</td><td style="border:1px solid #cbd5e1;padding:2px 4px;font-weight:700;">${escapeHtml(parts.slice(2).join(' | '))}</td></tr>`
+                        : `<tr><td colspan="3" style="border:1px solid #cbd5e1;padding:2px 4px;">${escapeHtml(line)}</td></tr>`;
+                }).join('');
+                scheduleTableHtml = `<div style="margin-top:6px;"><table style="width:100%;border-collapse:collapse;font-size:8.5px;"><thead><tr style="background:#f1f5f9;"><th style="border:1px solid #cbd5e1;padding:2px 4px;text-align:left;">Tanggal</th><th style="border:1px solid #cbd5e1;padding:2px 4px;">Waktu</th><th style="border:1px solid #cbd5e1;padding:2px 4px;text-align:left;">Mata Pelajaran</th></tr></thead><tbody>${sRows}</tbody></table></div>`;
+            }
+
+            const cardsHtml = studentsList.map(s => {
+                const schoolDisplay = s.asalSekolah && String(s.asalSekolah).trim() ? s.asalSekolah : defaultSchoolName;
+                const pinDisplay = s.pin || cfg.defaultPinDisplay || '123456';
+                return `
+                    <div class="exam-card-item" style="border:1.5px solid #0f172a;border-radius:10px;padding:10px 12px;background:#fff;page-break-inside:avoid;break-inside:avoid;">
+                        <div style="display:flex;align-items:center;gap:8px;border-bottom:2px double #0f172a;padding-bottom:6px;margin-bottom:6px;">
+                            <img src="${escapeHtml(logoSrc)}" onerror="this.style.display='none'" style="width:36px;height:36px;object-fit:contain;flex-shrink:0;">
+                            <div style="flex:1;text-align:center;line-height:1.25;">
+                                <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#0f172a;">${escapeHtml(schoolDisplay)}</div>
+                                <div style="font-size:9px;font-weight:800;color:#1e3a8a;">${escapeHtml(cfg.examTitle)}</div>
+                                ${cfg.examSubtitle ? `<div style="font-size:7.5px;font-weight:600;color:#475569;">${escapeHtml(cfg.examSubtitle)}</div>` : ''}
+                                ${cfg.academicYear ? `<div style="font-size:8px;color:#64748b;">${escapeHtml(cfg.academicYear)}</div>` : ''}
+                            </div>
+                        </div>
+                        <table style="width:100%;border-collapse:collapse;font-size:9.5px;line-height:1.45;">
+                            <tr><td style="width:28%;color:#475569;">Nama Peserta</td><td style="width:3%;">:</td><td style="font-weight:800;color:#0f172a;">${escapeHtml(s.fullName)}</td></tr>
+                            <tr><td style="color:#475569;">NISN / NIS</td><td>:</td><td style="font-family:monospace;font-weight:700;">${escapeHtml(s.nisn)} / ${escapeHtml(s.nis || '-')}</td></tr>
+                            <tr><td style="color:#475569;">Kelas</td><td>:</td><td style="font-weight:700;">Kelas ${escapeHtml(s.className)}</td></tr>
+                            <tr><td style="color:#475569;">Ruang &amp; Sesi</td><td>:</td><td style="font-weight:800;color:#047857;">${escapeHtml(cfg.roomName)} • ${escapeHtml(cfg.sessionInfo)}</td></tr>
+                        </table>
+                        <div style="margin-top:6px;padding:5px 8px;background:#f8fafc;border:1px dashed #64748b;border-radius:6px;display:flex;justify-content:space-between;font-size:9px;">
+                            <div>Username: <strong style="font-family:monospace;">${escapeHtml(s.username || s.nisn)}</strong></div>
+                            <div>PIN: <strong style="font-family:monospace;color:#1d4ed8;">${escapeHtml(pinDisplay)}</strong></div>
+                        </div>
+                        ${scheduleTableHtml}
+                        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:8px;padding-top:5px;border-top:1px solid #e2e8f0;font-size:8.5px;">
+                            <div style="width:42px;height:52px;border:1px solid #94a3b8;display:flex;align-items:center;justify-content:center;text-align:center;font-size:7px;color:#64748b;border-radius:4px;">Foto<br>2x3</div>
+                            <div style="text-align:center;min-width:130px;">
+                                <div>${escapeHtml(cfg.signCityDate)}</div>
+                                <div style="margin-bottom:22px;">${escapeHtml(cfg.signRole)}</div>
+                                <div style="font-weight:800;text-decoration:underline;">${escapeHtml(cfg.signName)}</div>
+                                <div style="font-size:7.5px;color:#475569;">${escapeHtml(cfg.signNip)}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const pageCssSize = cfg.paperSize === 'F4' ? '215mm 330mm' : 'A4 portrait';
+            const bodyContentOnly = `<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:10px;width:100%;">${cardsHtml}</div>`;
+            const fullHtmlDoc = `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Cetak Kartu Ujian</title><style>@page{size:${pageCssSize};margin:8mm;}body{font-family:Arial,sans-serif;margin:0;padding:4px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}</style></head><body>${bodyContentOnly}</body></html>`;
+            window._lastPrintFullHtml = fullHtmlDoc;
+            const printableEl = document.getElementById('printableArea');
+            if (printableEl) printableEl.innerHTML = bodyContentOnly;
+
+            const previewModalHtml = `
+                <div class="space-y-3 text-xs">
+                    <div class="p-3 bg-indigo-50 border border-indigo-200 rounded-2xl flex flex-wrap items-center justify-between gap-2">
+                        <p class="font-extrabold text-indigo-900"><i class="fa-solid fa-id-card text-indigo-600 mr-1.5"></i> Kartu Peserta Ujian (${studentsList.length} Siswa • Kertas ${escapeHtml(cfg.paperSize)})</p>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button type="button" onclick="window.renderAndTriggerPrint(window._lastPrintFullHtml, document.getElementById('printableArea').innerHTML, 'Kartu Peserta Ujian')" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-extrabold text-xs cursor-pointer"><i class="fa-solid fa-print mr-1"></i> Cetak / Simpan PDF</button>
+                            <button type="button" onclick="const w=window.open('','_blank'); if(w){w.document.open();w.document.write(window._lastPrintFullHtml);w.document.close();w.focus();setTimeout(()=>w.print(),300);}" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold text-xs cursor-pointer"><i class="fa-solid fa-up-right-from-square mr-1"></i> Tab Baru</button>
+                        </div>
+                    </div>
+                    <div class="border border-slate-300 rounded-2xl bg-white p-4 max-h-[62vh] overflow-auto custom-scrollbar shadow-inner">${bodyContentOnly}</div>
+                </div>
+            `;
+
+            window.showModal(`Pratinjau Kartu Peserta Ujian (${studentsList.length} Siswa)`, '', 'info', null, { html: previewModalHtml, wide: true, okText: 'Tutup Pratinjau' });
         };
 
         window.resetStudentFilters = function() {
@@ -3982,30 +4233,6 @@
         };
 
         // ============================================================================
-        // CETAK KARTU UJIAN
-        // ============================================================================
-        window.openPrintExamCardsModal = function() {
-            const filteredStudents = getFilteredStudentsList();
-            if (filteredStudents.length === 0) {
-                window.showModal('Data Kosong', 'Belum ada data siswa yang bisa dicetak kartunya.', 'info');
-                return;
-            }
-            const cardsHtml = filteredStudents.map(s => `
-                <div style="border:1.5px solid #0f172a;border-radius:10px;padding:10px 12px;background:#fff;page-break-inside:avoid;">
-                    <div style="font-size:10px;font-weight:800;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin-bottom:6px;">${escapeHtml(s.asalSekolah || appData.settings.schoolName)} — KARTU UJIAN</div>
-                    <div style="font-size:10px;line-height:1.5;">
-                        <div><strong>Nama:</strong> ${escapeHtml(s.fullName)}</div>
-                        <div><strong>NISN / Kelas:</strong> ${escapeHtml(s.nisn)} / Kelas ${escapeHtml(s.className)}</div>
-                        <div><strong>Username / PIN:</strong> ${escapeHtml(s.username || s.nisn)} / ${escapeHtml(s.pin || '123456')}</div>
-                    </div>
-                </div>
-            `).join('');
-            const bodyContentOnly = `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">${cardsHtml}</div>`;
-            const fullHtmlDoc = `<!DOCTYPE html><html><head><title>Kartu Ujian</title><style>@page{size:A4 portrait;margin:8mm;}body{font-family:sans-serif;}</style></head><body>${bodyContentOnly}</body></html>`;
-            window.renderAndTriggerPrint(fullHtmlDoc, bodyContentOnly, `Kartu Peserta Ujian (${filteredStudents.length} Siswa)`);
-        };
-
-        // ============================================================================
         // BANK SOAL, UJIAN, JADWAL & PESERTA UJIAN
         // ============================================================================
         function getQuestionTypeBadgeLabel(type) {
@@ -4570,6 +4797,25 @@
             return Boolean(exam && student && isExamStrictlyActive(exam) && isExamMatchingStudentClass(exam, student) && checkExamScheduleAccess(exam).allowed);
         }
 
+        function getExamScheduleEndMs(exam) {
+            if (!exam) return 0;
+            const todayIso = getTodayIsoWIB();
+            const endIso = parseDDMMYYYYToIso(exam.endDate) || todayIso;
+            const endTime = normalizeTimeHHMM(exam.endTime, '23:59');
+            const eP = endIso.split('-').map(Number);
+            const eT = endTime.split(':').map(Number);
+            const endMs = Date.UTC(eP[0], eP[1] - 1, eP[2], eT[0] - 7, eT[1], 59, 999);
+            return Number.isFinite(endMs) ? endMs : 0;
+        }
+
+        function getEffectiveExamEndTimeMs(exam, startedAtMs = Date.now()) {
+            const durationMs = Math.max(1, Number(exam?.durationMinutes) || 60) * 60 * 1000;
+            const byDurationMs = (Number(startedAtMs) || Date.now()) + durationMs;
+            const byScheduleMs = getExamScheduleEndMs(exam);
+            if (byScheduleMs > 0) return Math.min(byDurationMs, byScheduleMs);
+            return byDurationMs;
+        }
+
         async function verifyExamEligibilityFromServer(examId, student) {
             let targetExam = appData.exams.find(e => e.id === examId) || null;
             if (!IS_PREVIEW && supabase && examId) {
@@ -4593,13 +4839,9 @@
         }
 
         window.forceCloseStudentExamByAdmin = async function(noticeMessage) {
-            if (!isExamWorkspaceActive) return;
-            await window.persistExamSessionToCloud(true);
-            window.stopAllExamTimersAndWatchers();
-            currentActiveExam = null;
-            currentExamQuestions = [];
-            window.renderStudentPortal(false);
-            window.showModal('Ujian Ditutup / Berakhir', noticeMessage || 'Ujian ditutup oleh admin.', 'error');
+            if (!isExamWorkspaceActive || isSubmittingFinalExam) return;
+            const reason = noticeMessage || 'Batas jadwal ujian yang diatur Administrator telah berakhir atau ujian ditutup. Jawaban Anda langsung dikirim dan nilai otomatis ditarik ke Administrator.';
+            await window.submitExamFinal(true, reason);
         };
 
         function renderExamsContent(container) {
@@ -5716,7 +5958,7 @@
                             <button type="button" onclick="window.logoutApp()" class="px-4 py-2 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-2xl text-xs font-semibold transition cursor-pointer">Keluar</button>
                         </div>
                     </header>
-                    <main class="flex-1 p-4 sm:p-8 max-w-5xl mx-auto w-full space-y-6">
+                    <main class="flex-1 p-4 sm:p-8 max-w-5xl mx-auto w-full space-y-6" style="padding-bottom: calc(2rem + env(safe-area-inset-bottom, 0px));">
                         <div class="rounded-3xl bg-gradient-to-r from-blue-700 via-indigo-600 to-purple-700 text-white p-6 shadow-lg flex flex-wrap justify-between items-center gap-4">
                             <div>
                                 <p class="text-xs text-blue-100">Peserta Ujian</p>
@@ -5829,7 +6071,9 @@
                 currentViolationCount = Number(resumeSessionObj.violationCount) || 0;
                 currentViolationLogs = Array.isArray(resumeSessionObj.violationLogs) ? resumeSessionObj.violationLogs : [];
                 currentExamStartedAtMs = Number(resumeSessionObj.startedAtMs) || nowMs;
-                currentExamEndTimeMs = Number(resumeSessionObj.endTimeMs) || (currentExamStartedAtMs + (ex.durationMinutes * 60 * 1000));
+                const savedEndMs = Number(resumeSessionObj.endTimeMs) || getEffectiveExamEndTimeMs(ex, currentExamStartedAtMs);
+                const schedEndMs = getExamScheduleEndMs(ex);
+                currentExamEndTimeMs = schedEndMs > 0 ? Math.min(savedEndMs, schedEndMs) : savedEndMs;
                 remainingSeconds = Math.max(0, Math.floor((currentExamEndTimeMs - nowMs) / 1000));
             } else {
                 currentStudentAnswers = {};
@@ -5838,13 +6082,13 @@
                 currentViolationCount = 0;
                 currentViolationLogs = [];
                 currentExamStartedAtMs = nowMs;
-                currentExamEndTimeMs = nowMs + (ex.durationMinutes * 60 * 1000);
-                remainingSeconds = ex.durationMinutes * 60;
+                currentExamEndTimeMs = getEffectiveExamEndTimeMs(ex, nowMs);
+                remainingSeconds = Math.max(0, Math.floor((currentExamEndTimeMs - nowMs) / 1000));
             }
 
             if (remainingSeconds <= 0) {
                 isExamWorkspaceActive = true;
-                await window.submitExamFinal(true);
+                await window.submitExamFinal(true, 'Waktu pengerjaan atau jadwal ujian telah habis. Jawaban Anda otomatis dikirim dan nilai langsung ditarik ke Administrator.');
                 return;
             }
 
@@ -5867,13 +6111,26 @@
             if (periodicAutoSaveInterval) clearInterval(periodicAutoSaveInterval);
 
             examTimerInterval = setInterval(() => {
+                if (currentActiveExam) {
+                    const latestExam = appData.exams.find(e => e.id === currentActiveExam.id) || currentActiveExam;
+                    const schedEndMs = getExamScheduleEndMs(latestExam);
+                    if (schedEndMs > 0 && schedEndMs < currentExamEndTimeMs) {
+                        currentExamEndTimeMs = schedEndMs;
+                    }
+                    if (!isExamStrictlyActive(latestExam) || !checkExamScheduleAccess(latestExam).allowed) {
+                        clearInterval(examTimerInterval);
+                        window.stopAllExamTimersAndWatchers();
+                        window.submitExamFinal(true, 'Jadwal pelaksanaan ujian yang diatur Administrator telah berakhir atau ujian ditutup. Jawaban Anda otomatis dikirim dan nilai langsung ditarik ke Administrator.');
+                        return;
+                    }
+                }
                 remainingSeconds = Math.max(0, Math.floor((currentExamEndTimeMs - Date.now()) / 1000));
                 const timerEl = document.getElementById('examCountdownTimer');
                 if (timerEl) timerEl.innerText = formatHMS(remainingSeconds);
                 if (remainingSeconds <= 0) {
                     clearInterval(examTimerInterval);
                     window.stopAllExamTimersAndWatchers();
-                    window.submitExamFinal(true);
+                    window.submitExamFinal(true, 'Waktu pengerjaan soal telah habis. Seluruh jawaban Anda otomatis dikirim dan nilai langsung ditarik ke Administrator.');
                 }
             }, 1000);
 
@@ -6526,7 +6783,7 @@
                                 </div>
                             </div>
 
-                            <div class="p-4 bg-white border-t border-slate-200/80 space-y-2.5 shrink-0">
+                            <div class="p-4 bg-white border-t border-slate-200/80 space-y-2.5 shrink-0" style="padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));">
                                 <div class="flex items-center justify-between text-[11px] font-medium px-0.5">
                                     <span class="text-slate-600">Terjawab: <strong id="answeredCounterText" class="text-blue-600 font-bold">${answeredTotal}</strong>/${currentExamQuestions.length}</span>
                                     <span class="text-amber-600 font-semibold">Ragu: <strong id="doubtfulCounterText">${doubtfulTotal}</strong></span>
@@ -6668,25 +6925,25 @@
             `;
 
             window.showModal(
-                'Konfirmasi Selesai & Kirim Ujian',
+                'Konfirmasi Kirim Jawaban',
                 '',
                 'success',
                 async (confirmed) => {
                     if (confirmed) {
-                        setTimeout(() => window.submitExamFinal(false), 30);
+                        await window.submitExamFinal(false);
                     }
                     return true;
                 },
                 {
                     html,
                     showCancel: true,
-                    okText: 'Ya, Kirim Jawaban Sekarang!',
-                    cancelText: 'Periksa Kembali'
+                    cancelText: 'Periksa Kembali',
+                    okText: 'Ya, Kirim Jawaban Sekarang!'
                 }
             );
         };
 
-        window.submitExamFinal = async function(isTimeoutAutoSubmit = false) {
+        window.submitExamFinal = async function(isTimeoutAutoSubmit = false, timeoutNoticeMsg = '') {
             if (isSubmittingFinalExam) return;
             isSubmittingFinalExam = true;
             window.stopAllExamTimersAndWatchers();
@@ -6704,6 +6961,7 @@
             let savedResultObj = null;
             try {
                 const sessId = getSessionDocId(activeExam.id, student.studentId);
+                const partId = 'PRT-' + student.studentId + '-' + activeExam.id;
                 const clonedAnswers = sanitizePlainData(currentStudentAnswers || {});
                 const calc = window.calculateExamSubmissionScore(examQuestionsSnapshot, clonedAnswers, {});
 
@@ -6748,6 +7006,17 @@
                         finalScore: resultObj.finalScore,
                         violationCount: currentViolationCount,
                         sessionToken: currentSessionToken
+                    }),
+                    syncCollectionRecord('examParticipants', partId, {
+                        id: partId,
+                        examId: activeExam.id,
+                        studentId: student.studentId,
+                        nisn: student.nisn,
+                        studentName: student.name,
+                        className: student.className || '4',
+                        status: 'Selesai',
+                        violationCount: currentViolationCount,
+                        extraTimeMinutes: 0
                     })
                 ]);
             } finally {
@@ -6755,6 +7024,17 @@
                 isExamWorkspaceActive = false;
                 if (savedResultObj) {
                     window.renderExamResultReviewPage(savedResultObj, examQuestionsSnapshot);
+                    if (isTimeoutAutoSubmit) {
+                        setTimeout(() => {
+                            window.showModal(
+                                'Waktu Ujian Habis — Jawaban Dikirim Otomatis!',
+                                timeoutNoticeMsg || 'Waktu pengerjaan atau jadwal ujian telah berakhir. Seluruh jawaban Anda telah disimpan, dinilai otomatis (Nilai Akhir: ' + savedResultObj.finalScore + '), dan langsung ditarik ke server Administrator.',
+                                'info',
+                                null,
+                                { okText: 'Saya Mengerti' }
+                            );
+                        }, 150);
+                    }
                 } else {
                     window.renderStudentPortal(false);
                 }
@@ -6900,6 +7180,16 @@
                 if (!restored) {
                     window.renderLoginView();
                 }
+                // Penarikan otomatis berkala sesi kadaluarsa ke Admin setiap 20 detik
+                setInterval(() => {
+                    if (window.isStaffUser(appData.currentUser) && !document.hidden && !isBulkOperationInProgress) {
+                        const prevCount = appData.examResults.length;
+                        autoFinalizeExpiredSessions();
+                        if (appData.examResults.length > prevCount && (appData.activeAdminMenu === 'results' || appData.activeAdminMenu === 'participants')) {
+                            window.renderAdminCurrentSection();
+                        }
+                    }
+                }, 20000);
             } catch (error) {
                 console.error('Init Error:', error);
                 window.renderLoginView();
