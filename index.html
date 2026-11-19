@@ -4911,13 +4911,97 @@
             return byDurationMs;
         }
 
+        // ============================================================================
+        // FITUR PENGACAK URUTAN SOAL PER SISWA (ON / OFF PER PAKET UJIAN)
+        // ============================================================================
+        function getRandomizeConfigState() {
+            const raw = String(appData.settings.gasWebhookUrl || '').trim();
+            if (raw.startsWith('CBT_CFG:')) {
+                try {
+                    const parsed = JSON.parse(raw.slice(8));
+                    if (parsed && typeof parsed === 'object') {
+                        return {
+                            webhookUrl: String(parsed.webhookUrl || ''),
+                            randomizeByExam: (parsed.randomizeByExam && typeof parsed.randomizeByExam === 'object') ? parsed.randomizeByExam : {}
+                        };
+                    }
+                } catch (e) {}
+            }
+            return {
+                webhookUrl: raw,
+                randomizeByExam: {}
+            };
+        }
+
+        function isExamRandomizeEnabled(examOrId) {
+            const examId = typeof examOrId === 'object' && examOrId !== null ? String(examOrId.id || '') : String(examOrId || '');
+            if (!examId) return false;
+            const cfg = getRandomizeConfigState();
+            return Boolean(cfg.randomizeByExam[examId]);
+        }
+
+        async function setExamRandomizeEnabled(examId, enabled) {
+            const safeId = String(examId || '').trim();
+            if (!safeId) return false;
+            const cfg = getRandomizeConfigState();
+            cfg.randomizeByExam[safeId] = Boolean(enabled);
+            appData.settings.gasWebhookUrl = 'CBT_CFG:' + JSON.stringify(cfg);
+            return await syncCollectionRecord('appSettings', 'global', appData.settings);
+        }
+
+        window.toggleExamRandomize = async function(examId) {
+            if (!examId) return;
+            const nextState = !isExamRandomizeEnabled(examId);
+            const ok = await setExamRandomizeEnabled(examId, nextState);
+            if (!ok) {
+                window.showModal('Gagal Menyimpan', window._lastDbSyncError || 'Gagal mengubah pengaturan acak soal.', 'error');
+                return;
+            }
+            const ex = appData.exams.find(e => e.id === examId);
+            logActivity(`Pengacak soal untuk "${ex?.examName || examId}" ${nextState ? 'DIAKTIFKAN' : 'DINONAKTIFKAN'}.`);
+            window.renderAdminCurrentSection();
+        };
+
+        // Pengacakan deterministik berbasis (examId + studentId) agar nomor soal tiap siswa berbeda
+        // namun urutan tetap konsisten saat siswa melanjutkan ujian / pindah perangkat
+        function shuffleQuestionsForStudent(questionsList, examId, studentKey) {
+            const arr = Array.isArray(questionsList) ? [...questionsList] : [];
+            if (arr.length <= 1) return arr;
+            const seedStr = `${String(examId || '')}::${String(studentKey || '')}`;
+            let h = 2166136261;
+            for (let i = 0; i < seedStr.length; i++) {
+                h ^= seedStr.charCodeAt(i);
+                h = Math.imul(h, 16777619);
+            }
+            let state = (h >>> 0) || 1;
+            const nextRand = () => {
+                state = (state + 0x6D2B79F5) >>> 0;
+                let t = Math.imul(state ^ (state >>> 15), 1 | state);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(nextRand() * (i + 1));
+                const tmp = arr[i];
+                arr[i] = arr[j];
+                arr[j] = tmp;
+            }
+            return arr;
+        }
+
         async function verifyExamEligibilityFromServer(examId, student) {
             let targetExam = appData.exams.find(e => e.id === examId) || null;
             if (!IS_PREVIEW && supabase && examId) {
-                const cloudExam = await fetchSingleRecordFromDb('exams', examId);
+                const [cloudExam, settingsRes] = await Promise.all([
+                    fetchSingleRecordFromDb('exams', examId),
+                    supabase.from('app_settings').select('*').eq('id', 'global').maybeSingle()
+                ]);
                 if (cloudExam) {
                     targetExam = cloudExam;
                     upsertLocalRecord('exams', cloudExam.id, cloudExam);
+                }
+                if (settingsRes?.data) {
+                    appData.settings = { ...appData.settings, ...mapSettingsFromDb(settingsRes.data) };
                 }
             }
             if (!targetExam || !isExamStrictlyActive(targetExam)) {
@@ -4942,6 +5026,7 @@
         function renderExamsContent(container) {
             const cards = appData.exams.map(e => {
                 const isActive = isExamStrictlyActive(e);
+                const isRandomized = isExamRandomizeEnabled(e.id);
                 const sched = checkExamScheduleAccess(e);
                 const questionCount = (e.questionIds || []).length;
                 const startDisp = formatIsoToDDMMYYYY(parseDDMMYYYYToIso(e.startDate) || getTodayIsoWIB());
@@ -4989,9 +5074,14 @@
                             ${emptyQuestionNotice}
                         </div>
                         <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                            <button type="button" onclick="window.toggleExamStatus('${e.id}')" class="px-3 py-1.5 ${isActive ? 'bg-amber-50 hover:bg-amber-100 text-amber-700' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'} rounded-xl text-xs font-bold transition cursor-pointer">
-                                <i class="fa-solid fa-power-off mr-1"></i> ${isActive ? 'Tutup Ujian' : 'Aktifkan Ujian'}
-                            </button>
+                            <div class="flex flex-wrap items-center gap-1.5">
+                                <button type="button" onclick="window.toggleExamStatus('${e.id}')" class="px-3 py-1.5 ${isActive ? 'bg-amber-50 hover:bg-amber-100 text-amber-700' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'} rounded-xl text-xs font-bold transition cursor-pointer">
+                                    <i class="fa-solid fa-power-off mr-1"></i> ${isActive ? 'Tutup Ujian' : 'Aktifkan Ujian'}
+                                </button>
+                                <button type="button" onclick="window.toggleExamRandomize('${e.id}')" class="px-3 py-1.5 ${isRandomized ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200'} rounded-xl text-xs font-bold transition cursor-pointer" title="Hidupkan/matikan pengacak nomor soal per siswa">
+                                    <i class="fa-solid fa-shuffle mr-1"></i> Acak Soal: ${isRandomized ? 'ON' : 'OFF'}
+                                </button>
+                            </div>
                             <div class="space-x-1">
                                 <button type="button" onclick="window.openExamFormModal('${e.id}')" class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-pen mr-1"></i> Edit</button>
                                 <button type="button" onclick="window.deleteExamRecord('${e.id}')" class="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-trash"></i></button>
@@ -5031,6 +5121,15 @@
                     <div><label class="block font-bold text-slate-700 mb-1">Tanggal Selesai</label><input type="date" id="exFormEndDate" value="${escapeHtml(existing?.endDate || todayIso)}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
                     <div><label class="block font-bold text-slate-700 mb-1">Jam Mulai</label><input type="time" id="exFormStartTime" value="${escapeHtml(existing?.startTime || '07:00')}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
                     <div><label class="block font-bold text-slate-700 mb-1">Jam Selesai</label><input type="time" id="exFormEndTime" value="${escapeHtml(existing?.endTime || '23:59')}" class="w-full px-3 py-2 border border-slate-300 rounded-xl"></div>
+                    <div class="sm:col-span-2 pt-1">
+                        <label class="flex items-center gap-2.5 p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 cursor-pointer">
+                            <input type="checkbox" id="exFormRandomize" ${existing && isExamRandomizeEnabled(existing.id) ? 'checked' : ''} class="w-4 h-4 rounded text-indigo-600">
+                            <div>
+                                <span class="font-bold text-indigo-900 block"><i class="fa-solid fa-shuffle mr-1"></i> Acak Urutan Soal untuk Setiap Siswa</span>
+                                <span class="text-[11px] text-indigo-700">Jika aktif, nomor soal setiap siswa akan berbeda secara otomatis.</span>
+                            </div>
+                        </label>
+                    </div>
                 </div>
             `;
 
@@ -5047,6 +5146,7 @@
                 const endDate = document.getElementById('exFormEndDate')?.value || todayIso;
                 const startTime = normalizeTimeHHMM(document.getElementById('exFormStartTime')?.value, '07:00');
                 const endTime = normalizeTimeHHMM(document.getElementById('exFormEndTime')?.value, '23:59');
+                const randomizeChecked = Boolean(document.getElementById('exFormRandomize')?.checked);
 
                 const matchedQuestions = bankId ? appData.questions.filter(q => q.bankId === bankId).map(q => q.id) : appData.questions.map(q => q.id);
                 const docId = existing ? existing.id : ('EX-' + Date.now());
@@ -5069,6 +5169,7 @@
                     window.showModal('Gagal Menyimpan', window._lastDbSyncError || 'Gagal menyimpan ujian.', 'error');
                     return false;
                 }
+                await setExamRandomizeEnabled(docId, randomizeChecked);
                 renderExamsContent(document.getElementById('adminMainContent'));
                 return true;
             }, { html, showCancel: true, okText: 'Simpan Ujian' });
@@ -5137,6 +5238,7 @@
 
             const selectedExamObj = appData.exams.find(e => e.id === activeExamId) || null;
             const isSelectedExamOngoing = isExamOngoingNow(selectedExamObj);
+            const isSelectedExamRandomized = activeExamId ? isExamRandomizeEnabled(activeExamId) : false;
 
             const examOptions = appData.exams.map(e => {
                 const ongoing = isExamOngoingNow(e);
@@ -5224,6 +5326,9 @@
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
                             <button type="button" onclick="window.openPrintExamCardsModal()" class="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer"><i class="fa-solid fa-id-card mr-1"></i> Cetak Kartu Ujian</button>
+                            <button type="button" onclick="window.toggleExamRandomize('${escapeHtml(activeExamId)}')" ${activeExamId ? '' : 'disabled'} class="px-3.5 py-2 ${!activeExamId ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : (isSelectedExamRandomized ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 cursor-pointer')} rounded-xl text-xs font-bold transition" title="Hidupkan atau matikan pengacak urutan soal agar nomor soal setiap siswa berbeda">
+                                <i class="fa-solid fa-shuffle mr-1"></i> Acak Soal: ${isSelectedExamRandomized ? 'AKTIF' : 'NONAKTIF'}
+                            </button>
                             <button type="button" onclick="window.unlockAllStudentsLogin()" ${lockedLoginCount > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${lockedLoginCount > 0 ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 cursor-pointer' : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-unlock-keyhole mr-1"></i> Reset Semua Login (${lockedLoginCount})</button>
                             <button type="button" onclick="window.resetAllExamSessions('${escapeHtml(activeExamId)}')" ${resettableSessionCount > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${resettableSessionCount > 0 ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-rotate-left mr-1"></i> Reset Semua Sesi (${resettableSessionCount})</button>
                             <select onchange="appData.filters.participantExam=this.value; renderParticipantsContent(document.getElementById('adminMainContent'));" class="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
@@ -6245,6 +6350,14 @@
             if (currentExamQuestions.length === 0) {
                 window.showModal('Soal Belum Tersedia', 'Paket ujian ini belum memiliki butir soal.', 'error');
                 return;
+            }
+            currentExamQuestions.sort((a, b) => (Number(a.orderNum) || 0) - (Number(b.orderNum) || 0));
+            if (isExamRandomizeEnabled(ex.id)) {
+                currentExamQuestions = shuffleQuestionsForStudent(
+                    currentExamQuestions,
+                    ex.id,
+                    student.studentId || student.nisn || student.name
+                );
             }
 
             isSubmittingFinalExam = false;
