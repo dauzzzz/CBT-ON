@@ -2930,7 +2930,10 @@
                         <div class="flex flex-wrap items-center gap-2">
                             <button type="button" onclick="window.refreshStudentsFromCloud(true)" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"><i class="fa-solid fa-rotate mr-1"></i> Segarkan Data</button>
                             <button type="button" onclick="window.openPrintExamCardsModal()" ${filteredStudents.length > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${filteredStudents.length > 0 ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-id-card mr-1"></i> Cetak Kartu Ujian</button>
-                            <button type="button" onclick="window.unlockAllStudentsLogin()" class="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition cursor-pointer"><i class="fa-solid fa-unlock-keyhole mr-1"></i> Reset Semua Login</button>
+                            ${(() => {
+                                const lockedLoginCount = appData.students.filter(s => isStudentCurrentlyLoggedIn(s) || s.isLoggedIn).length;
+                                return `<button type="button" onclick="window.unlockAllStudentsLogin()" ${lockedLoginCount > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${lockedLoginCount > 0 ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 cursor-pointer' : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-unlock-keyhole mr-1"></i> Reset Semua Login (${lockedLoginCount})</button>`;
+                            })()}
                             <button type="button" onclick="window.deleteSelectedStudents()" ${selectedCount > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${selectedCount > 0 ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-trash-can mr-1"></i> Hapus Terpilih (${selectedCount})</button>
                             <button type="button" onclick="window.downloadStudentTemplate()" class="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-bold transition cursor-pointer"><i class="fa-solid fa-download mr-1"></i> Template Excel</button>
                             <button type="button" onclick="window.triggerStudentExcelImport()" class="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl text-xs font-bold transition cursor-pointer"><i class="fa-solid fa-file-excel mr-1"></i> Impor Excel</button>
@@ -3677,19 +3680,23 @@
             }, { showCancel: true, okText: 'Hapus' });
         };
 
-        window.unlockStudentLogin = async function(studentId) {
+        window.unlockStudentLogin = async function(studentId, silent = false) {
             const std = appData.students.find(s => String(s._docId || s.id) === String(studentId));
             if (!std) return;
             std.isLoggedIn = false;
             std.activeSessionId = '';
             std.lastHeartbeatAt = 0;
             await syncCollectionRecord('students', std.id, std);
-            window.renderAdminCurrentSection();
-            window.showModal('Reset Login Berhasil', `Kunci login ${std.fullName} telah dibebaskan.`, 'success');
+            if (!silent) {
+                window.renderAdminCurrentSection();
+                window.showModal('Reset Login Berhasil', `Kunci login ${std.fullName} telah dibebaskan.`, 'success');
+            }
         };
 
         window.unlockAllStudentsLogin = function() {
-            window.showModal('Reset Semua Login Siswa', 'Bebaskan kunci login seluruh akun siswa?', 'info', async (confirmed) => {
+            const lockedCount = appData.students.filter(s => isStudentCurrentlyLoggedIn(s) || s.isLoggedIn || s.activeSessionId).length;
+            if (lockedCount === 0) return;
+            window.showModal('Reset Semua Login Siswa', `Bebaskan kunci login untuk ${lockedCount} akun siswa yang sedang aktif?`, 'info', async (confirmed) => {
                 if (!confirmed) return true;
                 const updates = appData.students.filter(s => s.isLoggedIn || s.activeSessionId).map(s => ({
                     ...s,
@@ -4273,24 +4280,59 @@
         function renderExamsContent(container) {
             const cards = appData.exams.map(e => {
                 const isActive = isExamStrictlyActive(e);
+                const sched = checkExamScheduleAccess(e);
+                const questionCount = (e.questionIds || []).length;
+                const startDisp = formatIsoToDDMMYYYY(parseDDMMYYYYToIso(e.startDate) || getTodayIsoWIB());
+                const endDisp = formatIsoToDDMMYYYY(parseDDMMYYYYToIso(e.endDate) || getTodayIsoWIB());
+                const startTimeDisp = normalizeTimeHHMM(e.startTime, '07:00');
+                const endTimeDisp = normalizeTimeHHMM(e.endTime, '23:59');
+
+                let statusBadgeHtml = '';
+                let scheduleTextClass = 'text-slate-500';
+                let statusNoticeHtml = '';
+
+                if (!isActive) {
+                    statusBadgeHtml = `<span class="px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-extrabold">Ditutup</span>`;
+                    scheduleTextClass = 'text-red-600';
+                    statusNoticeHtml = `<p class="text-[11px] text-amber-700 bg-amber-50/80 border border-amber-200/80 rounded-xl px-3 py-1.5 font-medium"><i class="fa-solid fa-circle-info mr-1"></i> Soal belum aktif (ujian ditutup). Klik <strong>Aktifkan Ujian</strong> agar tampil di halaman siswa.</p>`;
+                } else if (sched.state === 'EXPIRED') {
+                    statusBadgeHtml = `<span class="px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-extrabold">Aktif • Jadwal Berakhir</span>`;
+                    scheduleTextClass = 'text-red-600';
+                    statusNoticeHtml = `<p class="text-[11px] text-red-700 bg-red-50/80 border border-red-200/80 rounded-xl px-3 py-1.5 font-medium"><i class="fa-solid fa-clock-rotate-left mr-1"></i> Jadwal pelaksanaan sudah berakhir. Edit tanggal/jam agar soal dapat diakses kembali.</p>`;
+                } else if (sched.state === 'UPCOMING') {
+                    statusBadgeHtml = `<span class="px-2.5 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-extrabold">Aktif • Belum Mulai</span>`;
+                    scheduleTextClass = 'text-blue-600';
+                    statusNoticeHtml = `<p class="text-[11px] text-blue-700 bg-blue-50/80 border border-blue-200/80 rounded-xl px-3 py-1.5 font-medium"><i class="fa-regular fa-clock mr-1"></i> Soal belum aktif karena belum memasuki jadwal mulai (${escapeHtml(startDisp)} pukul ${escapeHtml(startTimeDisp)} WIB).</p>`;
+                } else {
+                    statusBadgeHtml = `<span class="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-extrabold">Aktif • Sedang Berlangsung</span>`;
+                    scheduleTextClass = 'text-emerald-700';
+                }
+
+                const emptyQuestionNotice = questionCount === 0
+                    ? `<p class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-1.5 font-semibold"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Keterangan: Paket ujian ini belum memiliki butir soal.</p>`
+                    : '';
+
                 return `
-                    <div class="glass-panel p-5 rounded-2xl flex flex-col justify-between space-y-4">
+                    <div class="glass-panel p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col justify-between space-y-4">
                         <div class="space-y-2">
                             <div class="flex justify-between items-center gap-2">
-                                <span class="px-2.5 py-1 ${isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'} rounded-lg text-xs font-extrabold">${isActive ? 'Aktif' : 'Ditutup'}</span>
+                                ${statusBadgeHtml}
                                 <span class="font-mono bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg font-bold text-xs">TOKEN: ${escapeHtml(e.token)}</span>
                             </div>
                             <h3 class="text-base font-extrabold text-slate-900">${escapeHtml(e.examName)}</h3>
-                            <p class="text-xs text-slate-500">Mapel: <strong>${escapeHtml(getSubjectNameById(e.subjectId))}</strong> | Kelas: <strong>${escapeHtml(getClassNameById(e.classId))}</strong></p>
-                            <p class="text-xs text-slate-500">Durasi: <strong>${e.durationMinutes} Menit</strong> | Soal: <strong>${(e.questionIds || []).length} Butir</strong></p>
+                            <p class="text-xs text-slate-500">Mapel: <strong class="text-slate-700">${escapeHtml(getSubjectNameById(e.subjectId))}</strong> | Kelas: <strong class="text-slate-700">${escapeHtml(getClassNameById(e.classId))}</strong></p>
+                            <p class="text-xs text-slate-500">Durasi: <strong class="text-slate-700">${e.durationMinutes} Menit</strong> | Jumlah Soal: <strong class="text-slate-700">${questionCount} Butir</strong></p>
+                            <p class="text-[11px] font-semibold ${scheduleTextClass}"><i class="fa-regular fa-calendar-check mr-1"></i> Jadwal: ${escapeHtml(startDisp)} (${escapeHtml(startTimeDisp)}) s.d ${escapeHtml(endDisp)} (${escapeHtml(endTimeDisp)} WIB)</p>
+                            ${statusNoticeHtml}
+                            ${emptyQuestionNotice}
                         </div>
                         <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                            <button type="button" onclick="window.toggleExamStatus('${e.id}')" class="px-3 py-1.5 ${isActive ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'} rounded-xl text-xs font-bold cursor-pointer">
+                            <button type="button" onclick="window.toggleExamStatus('${e.id}')" class="px-3 py-1.5 ${isActive ? 'bg-amber-50 hover:bg-amber-100 text-amber-700' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'} rounded-xl text-xs font-bold transition cursor-pointer">
                                 <i class="fa-solid fa-power-off mr-1"></i> ${isActive ? 'Tutup Ujian' : 'Aktifkan Ujian'}
                             </button>
                             <div class="space-x-1">
-                                <button type="button" onclick="window.openExamFormModal('${e.id}')" class="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-pen mr-1"></i> Edit</button>
-                                <button type="button" onclick="window.deleteExamRecord('${e.id}')" class="px-2.5 py-1.5 bg-red-50 text-red-600 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-trash"></i></button>
+                                <button type="button" onclick="window.openExamFormModal('${e.id}')" class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-pen mr-1"></i> Edit</button>
+                                <button type="button" onclick="window.deleteExamRecord('${e.id}')" class="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-trash"></i></button>
                             </div>
                         </div>
                     </div>
@@ -4299,11 +4341,11 @@
 
             container.innerHTML = `
                 <div class="space-y-4">
-                    <div class="glass-panel p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3">
-                        <div><h3 class="font-bold text-slate-800 text-sm">Manajemen Paket Ujian</h3><p class="text-xs text-slate-500">Atur jadwal, durasi, token, dan bank soal ujian.</p></div>
+                    <div class="glass-panel p-4 rounded-2xl shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                        <div><h3 class="font-bold text-slate-800 text-sm">Manajemen Paket Ujian</h3><p class="text-xs text-slate-500">Buat, jadwalkan, pilih bank soal, dan atur status aktif ujian.</p></div>
                         <button type="button" onclick="window.openExamFormModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"><i class="fa-solid fa-plus mr-1"></i> Buat Ujian Baru</button>
                     </div>
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">${cards || '<p class="text-xs text-slate-400">Belum ada paket ujian.</p>'}</div>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">${cards || '<div class="col-span-full glass-panel p-8 rounded-2xl text-center text-xs text-slate-400">Belum ada paket ujian. Klik <strong>Buat Ujian Baru</strong> untuk menambahkan.</div>'}</div>
                 </div>
             `;
         }
@@ -4458,6 +4500,8 @@
             const countInProgress = enrichedParticipants.filter(x => x.statusKey === 'IN_PROGRESS').length;
             const countNotLoggedIn = enrichedParticipants.filter(x => x.statusKey === 'NOT_LOGGED_IN').length;
             const countDone = enrichedParticipants.filter(x => x.statusKey === 'DONE').length;
+            const lockedLoginCount = enrichedParticipants.filter(x => x.hasDeviceLock).length;
+            const resettableSessionCount = enrichedParticipants.filter(x => x.res || x.sess || x.violations > 0).length;
 
             const filteredParticipantRows = enrichedParticipants.filter(item => {
                 if (statusFilter !== 'ALL' && item.statusKey !== statusFilter) return false;
@@ -4503,9 +4547,9 @@
                             <p class="text-xs text-slate-500 mt-0.5">Pantau status pengerjaan real-time, filter sedang mengerjakan &amp; belum login, reset login perangkat, dan reset sesi.</p>
                         </div>
                         <div class="flex flex-wrap items-center gap-2.5">
-                            <button type="button" onclick="window.openPrintExamCardsModal()" class="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer"><i class="fa-solid fa-id-card mr-1"></i> Cetak Kartu Ujian</button>
-                            <button type="button" onclick="window.unlockAllStudentsLogin()" class="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition cursor-pointer"><i class="fa-solid fa-unlock-keyhole mr-1"></i> Reset Semua Login</button>
-                            <button type="button" onclick="window.resetAllExamSessions('${escapeHtml(activeExamId)}')" class="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-sm transition cursor-pointer"><i class="fa-solid fa-rotate mr-1"></i> Reset Semua Sesi</button>
+                            <button type="button" onclick="window.openPrintExamCardsModal()" ${countAll > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${countAll > 0 ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-id-card mr-1"></i> Cetak Kartu Ujian</button>
+                            <button type="button" onclick="window.unlockAllStudentsLogin()" ${lockedLoginCount > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${lockedLoginCount > 0 ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 cursor-pointer' : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-unlock-keyhole mr-1"></i> Reset Semua Login (${lockedLoginCount})</button>
+                            <button type="button" onclick="window.resetAllExamSessions('${escapeHtml(activeExamId)}')" ${resettableSessionCount > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${resettableSessionCount > 0 ? 'bg-red-600 hover:bg-red-700 text-white shadow-sm cursor-pointer' : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'} rounded-xl text-xs font-bold transition"><i class="fa-solid fa-rotate mr-1"></i> Reset Semua Sesi (${resettableSessionCount})</button>
                             <div class="flex flex-wrap items-center gap-2">
                                 <label class="text-xs font-bold text-slate-600">Paket Ujian:</label>
                                 <select onchange="window.filterParticipantExam(this.value)" class="px-3 py-1.5 ${isSelectedExamOngoing ? 'bg-emerald-50/70 border-emerald-300 text-emerald-950' : 'bg-white border-slate-200 text-slate-800'} border rounded-xl text-xs font-bold">
@@ -4575,7 +4619,7 @@
                 for (const r of matchingResults) {
                     await syncCollectionRecord('examResults', r.resultId || r.id, null, true);
                 }
-                await window.unlockStudentLogin(studentId);
+                await window.unlockStudentLogin(studentId, true);
                 window.renderAdminCurrentSection();
                 return true;
             }, { showCancel: true, okText: 'Ya, Reset Sesi' });
@@ -4583,6 +4627,8 @@
 
         window.resetAllExamSessions = function(examId) {
             if (!examId) return;
+            const hasAny = appData.examResults.some(r => r.examId === examId) || appData.examSessions.some(s => s.examId === examId);
+            if (!hasAny) return;
             window.showModal('Reset Semua Sesi', 'Yakin ingin mereset sesi seluruh peserta pada paket ujian ini?', 'error', async (confirmed) => {
                 if (!confirmed) return true;
                 const resIds = appData.examResults.filter(r => r.examId === examId).map(r => String(r._docId || r.id || r.resultId)).filter(Boolean);
@@ -5440,6 +5486,10 @@
             currentActiveExam = ex;
             currentExamQuestions = (ex.questionIds || []).map(qid => appData.questions.find(q => q.id === qid)).filter(Boolean);
             if (currentExamQuestions.length === 0) currentExamQuestions = appData.questions.filter(q => q.bankId === ex.bankId);
+            if (currentExamQuestions.length === 0) {
+                window.showModal('Soal Belum Tersedia', 'Paket ujian ini belum memiliki butir soal.', 'error');
+                return;
+            }
 
             isSubmittingFinalExam = false;
             currentSessionId = getSessionDocId(ex.id, student.studentId);
@@ -5474,7 +5524,7 @@
             }
 
             window.attachAntiCheatListeners();
-            renderExamWorkspace();
+            window.renderExamWorkspace();
             await window.persistExamSessionToCloud();
             startExamTimer();
         };
@@ -5543,6 +5593,19 @@
                 const isMatch = String(userAnswer).trim().toLowerCase() === String(q.correctAnswer || '').trim().toLowerCase();
                 return { status: isMatch ? 'CORRECT' : 'WRONG', earnedWeight: isMatch ? maxWeight : 0, maxWeight, ratio: isMatch ? 1 : 0 };
             }
+            if (q.type === 'matching') {
+                const expectedMap = (q.correctAnswer && typeof q.correctAnswer === 'object' && !Array.isArray(q.correctAnswer))
+                    ? q.correctAnswer
+                    : parseMatchingOptionsAndKey(q.options || [], String(q.correctAnswer || '')).correctAnswer;
+                const keys = Object.keys(expectedMap || {});
+                if (keys.length === 0) return { status: 'WRONG', earnedWeight: 0, maxWeight, ratio: 0 };
+                let matched = 0;
+                keys.forEach(k => {
+                    if (String(userAnswer?.[k] || '').trim().toLowerCase() === String(expectedMap[k] || '').trim().toLowerCase()) matched++;
+                });
+                const ratio = matched / keys.length;
+                return { status: ratio === 1 ? 'CORRECT' : (ratio > 0 ? 'PARTIAL' : 'WRONG'), earnedWeight: safeRoundTwoDecimals(ratio * maxWeight), maxWeight, ratio };
+            }
             if (q.type === 'essay') {
                 const earned = manualEssayScore !== undefined ? safeRoundTwoDecimals(Math.min(maxWeight, Math.max(0, Number(manualEssayScore) || 0))) : 0;
                 return { status: 'ESSAY', earnedWeight: earned, maxWeight, ratio: maxWeight > 0 ? earned / maxWeight : 0 };
@@ -5575,6 +5638,47 @@
             return { totalScoreObtained, maxPossibleScore, finalScore, correctCount, wrongCount, emptyCount, hasEssayQuestion, essayScores, questionScores: [] };
         };
 
+        function getQuestionInstructionText(type) {
+            if (type === 'pg') return 'Pilih satu jawaban yang paling tepat!';
+            if (type === 'pg_complex') return 'Pilih lebih dari satu jawaban yang benar!';
+            if (type === 'true_false') return 'Tentukan apakah pernyataan tersebut Benar atau Salah!';
+            if (type === 'matching') return 'Pasangkan setiap pernyataan di sebelah kiri dengan pasangan yang tepat!';
+            if (type === 'short_answer') return 'Ketikkan jawaban singkat dan tepat pada kolom yang tersedia!';
+            if (type === 'essay') return 'Tuliskan uraian jawaban lengkap Anda pada kolom di bawah ini!';
+            return 'Pilih satu jawaban yang paling tepat!';
+        }
+
+        function formatStimulusTextWithBoldLead(rawText) {
+            if (!rawText) return '';
+            const trimmedText = String(rawText).replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '');
+            if (!trimmedText) return '';
+            const lines = trimmedText.split(/\r?\n/);
+            let firstNonEmptyFormatted = false;
+            return lines.map(line => {
+                const cleanLine = line.trim();
+                if (cleanLine === '') return '<br>';
+                const renderedLine = /<(b|strong|i|em|u|mark|sup|sub|ul|ol|li|div|p|span|br)\b/i.test(cleanLine)
+                    ? window.sanitizeRichTextHtml(cleanLine)
+                    : window.renderMathExpressionsInHtml(cleanLine);
+                if (!firstNonEmptyFormatted) {
+                    firstNonEmptyFormatted = true;
+                    return `<strong class="font-poppins font-bold text-slate-900 text-[15px] sm:text-[16px] leading-snug block mb-1">${renderedLine}</strong>`;
+                }
+                return `<span class="block">${renderedLine}</span>`;
+            }).join('');
+        }
+
+        window.previewZoomImage = function(imgUrl, caption) {
+            if (!imgUrl) return;
+            const html = `
+                <div class="text-center space-y-2">
+                    <img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(caption || 'Gambar')}" class="max-h-[65vh] w-auto mx-auto rounded-xl border border-slate-200 object-contain bg-slate-50 p-2">
+                    <p class="text-xs text-slate-500 font-medium">${escapeHtml(caption || '')}</p>
+                </div>
+            `;
+            window.showModal(caption || 'Pratinjau Gambar', '', 'info', null, { html, wide: true, okText: 'Tutup Gambar' });
+        };
+
         window.renderExamWorkspace = function() {
             const container = document.getElementById('appContainer');
             const student = appData.currentUser;
@@ -5582,81 +5686,245 @@
             if (!q) return;
 
             let answeredTotal = 0;
+            let doubtfulTotal = 0;
+
             const gridNav = currentExamQuestions.map((item, idx) => {
                 const isAns = isQuestionAnswered(currentStudentAnswers[item.id]);
                 const isDoubt = !!currentDoubtfulMap[item.id];
                 if (isAns) answeredTotal++;
-                let cls = 'bg-slate-200 text-slate-800';
-                if (idx === currentQuestionIndex) cls = 'bg-white text-slate-900 border-2 border-indigo-600';
-                else if (isDoubt) cls = 'bg-amber-400 text-slate-950';
-                else if (isAns) cls = 'bg-indigo-600 text-white';
-                return `<button type="button" onclick="window.jumpToQuestion(${idx})" class="h-9 w-full rounded-xl text-xs font-bold cursor-pointer ${cls}">${idx + 1}</button>`;
+                if (isDoubt) doubtfulTotal++;
+
+                let cls = 'bg-slate-100 text-slate-700 border border-slate-200/80 hover:border-blue-400 hover:bg-blue-50';
+                if (idx === currentQuestionIndex) {
+                    cls = 'bg-white text-slate-900 border-2 border-blue-600 ring-2 ring-blue-500/15 shadow-xs font-bold';
+                } else if (isDoubt) {
+                    cls = 'bg-amber-400 text-slate-950 border border-amber-500 font-bold';
+                } else if (isAns) {
+                    cls = 'bg-blue-600 text-white border border-blue-700 font-bold';
+                }
+                return `<button type="button" onclick="window.jumpToQuestion(${idx})" class="h-10 sm:h-9 w-full rounded-xl text-xs font-semibold flex items-center justify-center transition cursor-pointer ${cls}">${idx + 1}</button>`;
             }).join('');
 
             let answerHtml = '';
             if (q.type === 'pg') {
                 const cur = currentStudentAnswers[q.id] || '';
                 answerHtml = (q.options || []).map((opt, i) => {
-                    if (!opt) return '';
+                    if (isChoiceOptionEmpty(opt, i)) return '';
                     const letter = String.fromCharCode(65 + i);
                     const sel = cur === letter;
-                    return `<label onclick="window.saveAnswerAndRefresh('${q.id}', '${letter}')" class="flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer ${sel ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-100' : 'border-slate-200 bg-white'}"><span class="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold ${sel ? 'bg-indigo-600 text-white' : 'bg-slate-100'}">${letter}</span><span>${window.renderMathExpressionsInHtml(opt)}</span></label>`;
-                }).join('');
+                    return `
+                        <label onclick="window.saveAnswerAndRefresh('${q.id}', '${letter}')" class="flex items-center justify-between gap-3 p-4 rounded-2xl border cursor-pointer transition ${sel ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-100 shadow-xs' : 'border-slate-200/90 bg-white hover:border-blue-300 shadow-2xs'}">
+                            <div class="flex items-center gap-3.5">
+                                <span class="w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${sel ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}">${letter}</span>
+                                <span class="text-[14.5px] sm:text-[15.5px] text-slate-800 leading-relaxed">${window.renderMathExpressionsInHtml(String(opt).trim())}</span>
+                            </div>
+                            <span class="w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${sel ? 'border-blue-600' : 'border-slate-300'}">
+                                ${sel ? '<span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>' : ''}
+                            </span>
+                        </label>
+                    `;
+                }).filter(Boolean).join('');
             } else if (q.type === 'pg_complex') {
                 const cur = Array.isArray(currentStudentAnswers[q.id]) ? currentStudentAnswers[q.id] : [];
                 answerHtml = (q.options || []).map((opt, i) => {
-                    if (!opt) return '';
+                    if (isChoiceOptionEmpty(opt, i)) return '';
                     const letter = String.fromCharCode(65 + i);
                     const sel = cur.includes(letter);
-                    return `<label class="flex items-center justify-between gap-3 p-3.5 rounded-2xl border cursor-pointer ${sel ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 bg-white'}"><span><strong>${letter}.</strong> ${window.renderMathExpressionsInHtml(opt)}</span><input type="checkbox" ${sel ? 'checked' : ''} onchange="window.saveComplexAnswer('${q.id}', '${letter}', this.checked)" class="w-5 h-5"></label>`;
-                }).join('');
+                    return `
+                        <label class="flex items-center justify-between gap-3 p-4 rounded-2xl border cursor-pointer transition ${sel ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-100' : 'border-slate-200/90 bg-white hover:border-blue-300'}">
+                            <div class="flex items-center gap-3.5">
+                                <span class="w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${sel ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'}">${letter}</span>
+                                <span class="text-[14.5px] sm:text-[15.5px] text-slate-800 leading-relaxed">${window.renderMathExpressionsInHtml(String(opt).trim())}</span>
+                            </div>
+                            <input type="checkbox" ${sel ? 'checked' : ''} onchange="window.saveComplexAnswer('${q.id}', '${letter}', this.checked)" class="w-5 h-5 text-blue-600 rounded border-slate-300 shrink-0">
+                        </label>
+                    `;
+                }).filter(Boolean).join('');
             } else if (q.type === 'true_false') {
                 const cur = currentStudentAnswers[q.id] || '';
-                answerHtml = ['Benar', 'Salah'].map(val => `<button type="button" onclick="window.saveAnswerAndRefresh('${q.id}', '${val}')" class="p-4 rounded-2xl border-2 font-bold cursor-pointer ${cur === val ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-800 border-slate-200'}">${val}</button>`).join('');
+                answerHtml = `
+                    <div class="grid grid-cols-2 gap-3">
+                        ${['Benar', 'Salah'].map(val => `<button type="button" onclick="window.saveAnswerAndRefresh('${q.id}', '${val}')" class="p-4 rounded-2xl border-2 text-sm font-bold cursor-pointer transition ${cur === val ? (val === 'Benar' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-red-600 text-white border-red-600') : 'bg-white text-slate-800 border-slate-200 hover:border-blue-300'}">${val}</button>`).join('')}
+                    </div>
+                `;
+            } else if (q.type === 'matching') {
+                const pairs = (Array.isArray(q.matchingPairs) && q.matchingPairs.length > 0)
+                    ? q.matchingPairs
+                    : parseMatchingOptionsAndKey(q.options || [], '').matchingPairs;
+                const rightOptions = [...new Set(pairs.map(p => p.right))].sort((a, b) => String(a).localeCompare(String(b)));
+                const curObj = (typeof currentStudentAnswers[q.id] === 'object' && currentStudentAnswers[q.id] !== null) ? currentStudentAnswers[q.id] : {};
+                answerHtml = pairs.map((p, idx) => {
+                    const selectedVal = curObj[String(idx)] || '';
+                    const optsHtml = rightOptions.map(ro => `<option value="${escapeHtml(ro)}" ${selectedVal === ro ? 'selected' : ''}>${escapeHtml(ro)}</option>`).join('');
+                    return `
+                        <div class="p-4 bg-white rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                            <span class="text-sm text-slate-800">${idx + 1}. ${window.renderMathExpressionsInHtml(p.left)}</span>
+                            <select onchange="window.saveMatchingAnswer('${q.id}', '${idx}', this.value)" class="px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm text-blue-700">
+                                <option value="">-- Pilih Pasangan --</option>
+                                ${optsHtml}
+                            </select>
+                        </div>
+                    `;
+                }).join('');
+            } else if (q.type === 'short_answer') {
+                const cur = currentStudentAnswers[q.id] || '';
+                answerHtml = `<input type="text" value="${escapeHtml(cur)}" oninput="window.saveAnswer('${q.id}', this.value)" placeholder="Ketik jawaban singkat Anda di sini..." class="w-full p-4 bg-white border border-slate-300 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">`;
             } else {
                 const cur = currentStudentAnswers[q.id] || '';
-                answerHtml = `<textarea rows="4" oninput="window.saveAnswer('${q.id}', this.value)" placeholder="Ketik jawaban Anda..." class="w-full p-4 bg-white border border-slate-300 rounded-2xl text-sm">${escapeHtml(cur)}</textarea>`;
+                answerHtml = `<textarea rows="5" oninput="window.saveAnswer('${q.id}', this.value)" placeholder="Ketik jawaban uraian lengkap Anda di sini..." class="w-full p-4 bg-white border border-slate-300 rounded-2xl text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500">${escapeHtml(cur)}</textarea>`;
             }
 
+            const hasStimulusText = Boolean(q.stimulusText && q.stimulusText.trim());
+            const hasStimulusImg = Boolean(q.stimulusImage && q.stimulusImage.trim());
+            const hasQuestionImg = Boolean(q.questionImage && q.questionImage.trim());
+            const isCurrentDoubtful = !!currentDoubtfulMap[q.id];
+
             container.innerHTML = `
-                <div class="flex-1 flex flex-col h-full bg-slate-100 overflow-hidden font-poppins">
-                    <header class="bg-slate-900 text-white px-4 py-3 flex flex-wrap justify-between items-center gap-2 shrink-0">
-                        <div>
-                            <h2 class="text-sm font-bold">${escapeHtml(currentActiveExam.examName)}</h2>
-                            <p class="text-[11px] text-slate-300">${escapeHtml(student.name)} • Kelas ${escapeHtml(student.className || '4')}</p>
+                <div class="flex-1 flex flex-col h-full min-h-0 bg-white overflow-hidden select-none font-poppins">
+                    <!-- Header Ruang Ujian -->
+                    <header class="bg-gradient-to-r from-[#0b132b] via-[#101c3d] to-[#0b132b] text-white px-4 sm:px-6 py-2.5 flex flex-wrap justify-between items-center gap-3 shrink-0 border-b border-slate-800 shadow-md">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <img src="${escapeHtml(appData.settings.schoolLogo || DEFAULT_SCHOOL_LOGO)}" onerror="this.src='${DEFAULT_SCHOOL_LOGO}'" alt="Logo" class="w-10 h-10 rounded-full bg-white object-contain p-0.5 shrink-0 border border-blue-400/40 shadow-sm">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <h2 class="text-xs sm:text-sm font-bold tracking-wide uppercase text-white truncate">${escapeHtml(currentActiveExam.examName)}</h2>
+                                    <span class="px-2.5 py-0.5 bg-blue-600/90 text-white border border-blue-400/40 rounded-full text-[10px] sm:text-[11px] font-medium">${escapeHtml(getSubjectNameById(currentActiveExam.subjectId))}</span>
+                                </div>
+                                <p class="text-[10px] sm:text-[11px] text-slate-300 truncate">Platform Ujian dan Evaluasi Pembelajaran • <strong class="text-white font-semibold uppercase">${escapeHtml(appData.settings.schoolName)}</strong></p>
+                            </div>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <span id="examViolationCounter" class="px-3 py-1 rounded-full bg-amber-950 text-amber-300 border border-amber-500/40 text-xs font-bold">Pelanggaran: ${currentViolationCount}x</span>
-                            <span id="examCountdownTimer" class="px-3.5 py-1 rounded-full bg-red-600 text-white font-mono text-xs font-bold">${formatHMS(remainingSeconds)}</span>
+
+                        <div class="flex flex-wrap items-center gap-2 sm:gap-2.5 shrink-0">
+                            <div class="px-3.5 py-1.5 rounded-full bg-amber-950/90 border border-amber-500/50 text-amber-400 text-[11px] sm:text-xs font-semibold flex items-center gap-1.5">
+                                <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+                                <span id="examViolationCounter">Pelanggaran: ${currentViolationCount}x</span>
+                            </div>
+
+                            <div class="hidden md:flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-800/90 border border-slate-600/70">
+                                <div class="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-400/30 flex items-center justify-center text-xs shrink-0">
+                                    <i class="fa-solid fa-user-check"></i>
+                                </div>
+                                <div class="leading-tight">
+                                    <p class="text-[11px] font-semibold text-white flex items-center gap-1.5">
+                                        <span class="uppercase">${escapeHtml(student.name)}</span>
+                                        <span class="text-slate-400">•</span>
+                                        <span class="text-cyan-300 uppercase">${escapeHtml(appData.settings.schoolName)}</span>
+                                    </p>
+                                    <p class="text-[10px] text-slate-300">Kelas ${escapeHtml(student.className || '4')} • NISN: ${escapeHtml(student.nisn)}</p>
+                                </div>
+                            </div>
+
+                            <div class="px-4 py-1.5 bg-red-600 text-white rounded-full font-mono font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-md border border-red-400/40">
+                                <i class="fa-regular fa-clock"></i>
+                                <span id="examCountdownTimer">${formatHMS(remainingSeconds)}</span>
+                            </div>
                         </div>
                     </header>
 
-                    <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 overflow-y-auto custom-scrollbar">
-                        <section class="lg:col-span-8 glass-panel rounded-3xl p-5 flex flex-col justify-between space-y-4">
-                            <div class="space-y-4">
-                                <div class="flex justify-between items-center border-b border-slate-200/70 pb-3">
-                                    <span class="px-3.5 py-1 rounded-full bg-indigo-600 text-white text-xs font-bold">Soal #${currentQuestionIndex + 1}</span>
-                                    <span class="text-xs font-bold text-slate-500">Bobot: ${q.weight} Poin</span>
-                                </div>
-                                ${q.stimulusText ? `<div class="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-sm text-slate-800">${window.formatRichQuestionText(q.stimulusText)}</div>` : ''}
-                                <div class="text-base sm:text-lg font-semibold text-slate-900">${window.formatRichQuestionText(q.questionText)}</div>
-                                <div class="space-y-2.5">${answerHtml}</div>
+                    <!-- Konten 3 Kolom: Stimulus | Soal & Jawaban | Penjelajah Soal -->
+                    <div class="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-12 overflow-y-auto lg:overflow-hidden custom-scrollbar bg-white">
+                        <!-- KOLOM KIRI: PANEL STIMULUS & INFORMASI -->
+                        <section class="lg:col-span-5 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
+                            <div class="px-5 py-3.5 border-b border-slate-100 shrink-0">
+                                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                    <i class="fa-solid fa-book-open text-blue-600"></i> PANEL STIMULUS &amp; INFORMASI
+                                </h3>
                             </div>
-                            <div class="pt-4 border-t border-slate-200/70 flex justify-between items-center gap-2">
-                                <button type="button" onclick="window.prevQuestion()" ${currentQuestionIndex === 0 ? 'disabled' : ''} class="px-4 py-2.5 bg-slate-200 text-slate-800 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-40">Sebelumnya</button>
-                                <button type="button" onclick="window.toggleDoubtful('${q.id}')" class="px-4 py-2.5 bg-amber-400 text-slate-950 rounded-xl text-xs font-bold cursor-pointer">Ragu-Ragu</button>
-                                <button type="button" onclick="window.nextQuestion()" ${currentQuestionIndex === currentExamQuestions.length - 1 ? 'disabled' : ''} class="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-40">Selanjutnya</button>
+                            <div class="p-5 flex-1 lg:overflow-y-auto custom-scrollbar space-y-4">
+                                ${hasStimulusText ? `
+                                    <div class="p-5 rounded-2xl bg-[#FFFDF7] border border-amber-200/90 text-slate-800 text-[14.5px] sm:text-[15px] leading-relaxed">
+                                        ${formatStimulusTextWithBoldLead(q.stimulusText)}
+                                    </div>
+                                ` : ''}
+                                ${hasStimulusImg ? `
+                                    <div class="rounded-2xl border border-amber-200/90 bg-[#FFFDF7] p-3.5 space-y-2">
+                                        <img src="${escapeHtml(q.stimulusImage)}" alt="Stimulus" onclick="window.previewZoomImage('${escapeHtml(q.stimulusImage)}', 'Gambar Stimulus Soal Nomor ${currentQuestionIndex + 1}')" class="w-full max-h-80 object-contain rounded-xl bg-white mx-auto cursor-zoom-in border border-slate-100 p-1">
+                                    </div>
+                                ` : ''}
+                                ${(!hasStimulusText && !hasStimulusImg) ? `
+                                    <div class="p-6 rounded-2xl bg-[#FFFDF7] border border-dashed border-amber-200 text-center space-y-1.5">
+                                        <i class="fa-regular fa-file-lines text-amber-400 text-2xl"></i>
+                                        <p class="text-sm font-semibold text-slate-700">Tidak Ada Wacana / Gambar Stimulus</p>
+                                        <p class="text-xs text-slate-500">Perhatikan langsung pertanyaan pada panel tengah untuk menjawab soal.</p>
+                                    </div>
+                                ` : ''}
                             </div>
                         </section>
 
-                        <aside class="lg:col-span-4 glass-panel rounded-3xl p-5 flex flex-col justify-between space-y-4">
-                            <div class="space-y-3">
-                                <h3 class="text-xs font-extrabold uppercase text-slate-700">Nomor Soal (${answeredTotal}/${currentExamQuestions.length} Terjawab)</h3>
-                                <div class="grid grid-cols-5 gap-2">${gridNav}</div>
+                        <!-- KOLOM TENGAH: PERTANYAAN & PILIHAN JAWABAN -->
+                        <section class="lg:col-span-5 bg-slate-50/40 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
+                            <div class="px-5 py-3.5 border-b border-slate-100 bg-white flex flex-wrap items-center justify-between gap-2 shrink-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="px-4 py-1.5 rounded-full bg-blue-600 text-white text-xs sm:text-sm font-semibold shadow-2xs">Soal Nomor ${currentQuestionIndex + 1}</span>
+                                    <span class="px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs sm:text-sm font-medium">${escapeHtml(getQuestionTypeBadgeLabel(q.type))}</span>
+                                </div>
+                                <span class="px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs sm:text-sm font-semibold flex items-center gap-1.5">
+                                    <i class="fa-solid fa-star text-amber-400"></i> Bobot: ${q.weight} Poin
+                                </span>
                             </div>
-                            <button type="button" onclick="window.confirmSubmitExam()" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs sm:text-sm font-bold shadow-md cursor-pointer">
-                                <i class="fa-solid fa-paper-plane mr-1.5"></i> Kirim &amp; Selesai
-                            </button>
+
+                            <div class="p-5 flex-1 lg:overflow-y-auto custom-scrollbar space-y-4">
+                                <div class="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
+                                    <div class="text-[16px] sm:text-[17px] text-slate-900 leading-relaxed font-normal">
+                                        ${window.formatRichQuestionText(q.questionText)}
+                                    </div>
+                                    ${hasQuestionImg ? `
+                                        <img src="${escapeHtml(q.questionImage)}" alt="Gambar Soal" onclick="window.previewZoomImage('${escapeHtml(q.questionImage)}', 'Gambar Soal Nomor ${currentQuestionIndex + 1}')" class="max-h-72 w-auto rounded-xl border border-slate-200 object-contain cursor-zoom-in bg-white p-1">
+                                    ` : ''}
+                                </div>
+
+                                <div class="flex items-center gap-2 text-xs sm:text-[13px] font-medium text-slate-600 px-1">
+                                    <i class="fa-solid fa-circle-dot text-blue-600"></i>
+                                    <span>${escapeHtml(getQuestionInstructionText(q.type))}</span>
+                                </div>
+
+                                <div class="space-y-3">
+                                    ${answerHtml}
+                                </div>
+                            </div>
+
+                            <div class="px-5 py-3.5 bg-white border-t border-slate-200/80 flex items-center justify-between gap-2 shrink-0">
+                                <button type="button" onclick="window.prevQuestion()" ${currentQuestionIndex === 0 ? 'disabled' : ''} class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed">
+                                    <i class="fa-solid fa-arrow-left"></i> Sebelumnya
+                                </button>
+                                <button type="button" onclick="window.toggleDoubtful('${q.id}')" class="px-5 py-2.5 ${isCurrentDoubtful ? 'bg-amber-500 ring-2 ring-amber-300' : 'bg-amber-400 hover:bg-amber-500'} text-slate-950 rounded-2xl text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition shadow-xs cursor-pointer">
+                                    <i class="fa-solid fa-flag"></i> ${isCurrentDoubtful ? 'Ragu-Ragu (Aktif)' : 'Ragu-Ragu'}
+                                </button>
+                                <button type="button" onclick="window.nextQuestion()" ${currentQuestionIndex === currentExamQuestions.length - 1 ? 'disabled' : ''} class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition shadow-sm cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed">
+                                    Selanjutnya <i class="fa-solid fa-arrow-right"></i>
+                                </button>
+                            </div>
+                        </section>
+
+                        <!-- KOLOM KANAN: PENJELAJAH SOAL -->
+                        <aside class="lg:col-span-2 bg-white flex flex-col justify-between shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
+                            <div class="p-4 flex-1 lg:overflow-y-auto custom-scrollbar space-y-3">
+                                <div class="pb-2.5 border-b border-slate-100">
+                                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                        <i class="fa-solid fa-border-all text-blue-600"></i> PENJELAJAH SOAL
+                                    </h3>
+                                </div>
+
+                                <div class="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-600 bg-slate-50 px-2.5 py-2 rounded-xl border border-slate-200/70">
+                                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-600 inline-block"></span> Dijawab</span>
+                                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span> Ragu</span>
+                                    <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-slate-300 inline-block"></span> Belum</span>
+                                </div>
+
+                                <div class="grid grid-cols-4 gap-2 pt-1">
+                                    ${gridNav}
+                                </div>
+                            </div>
+
+                            <div class="p-4 bg-white border-t border-slate-200/80 space-y-2.5 shrink-0">
+                                <div class="flex items-center justify-between text-[11px] font-medium px-0.5">
+                                    <span class="text-slate-600">Terjawab: <strong id="answeredCounterText" class="text-blue-600 font-bold">${answeredTotal}</strong>/${currentExamQuestions.length}</span>
+                                    <span class="text-amber-600 font-semibold">Ragu: <strong id="doubtfulCounterText">${doubtfulTotal}</strong></span>
+                                </div>
+                                <button type="button" onclick="window.confirmSubmitExam()" class="w-full py-3 bg-[#108963] hover:bg-[#0d7453] text-white rounded-2xl text-xs sm:text-sm font-semibold shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer">
+                                    <i class="fa-solid fa-paper-plane"></i> Kirim &amp; Selesai
+                                </button>
+                            </div>
                         </aside>
                     </div>
                 </div>
@@ -5665,11 +5933,26 @@
 
         window.saveAnswer = function(qId, val) {
             currentStudentAnswers[qId] = val;
+            const answeredEl = document.getElementById('answeredCounterText');
+            if (answeredEl) {
+                const count = currentExamQuestions.filter(item => isQuestionAnswered(currentStudentAnswers[item.id])).length;
+                answeredEl.innerText = String(count);
+            }
             window.scheduleAutoSave(false);
         };
 
         window.saveAnswerAndRefresh = function(qId, val) {
             currentStudentAnswers[qId] = val;
+            window.renderExamWorkspace();
+            window.scheduleAutoSave(true);
+        };
+
+        window.saveMatchingAnswer = function(qId, pairIdx, val) {
+            if (typeof currentStudentAnswers[qId] !== 'object' || currentStudentAnswers[qId] === null) {
+                currentStudentAnswers[qId] = {};
+            }
+            if (val) currentStudentAnswers[qId][String(pairIdx)] = val;
+            else delete currentStudentAnswers[qId][String(pairIdx)];
             renderExamWorkspace();
             window.scheduleAutoSave(true);
         };
