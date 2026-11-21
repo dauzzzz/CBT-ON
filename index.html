@@ -4363,7 +4363,6 @@
                         <div class="flex flex-wrap items-center gap-2">
                             <button type="button" onclick="window.downloadQuestionTemplate()" class="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-download mr-1"></i> Template Excel</button>
                             <button type="button" onclick="window.triggerQuestionExcelImport()" class="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl text-xs font-bold cursor-pointer"><i class="fa-solid fa-file-excel mr-1"></i> Impor Soal</button>
-                            <button type="button" onclick="window.exportQuestionsExcel()" ${filteredQuestions.length > 0 ? '' : 'disabled'} class="px-3.5 py-2 ${filteredQuestions.length > 0 ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer' : 'bg-slate-100 text-slate-400 cursor-not-allowed'} rounded-xl text-xs font-bold transition" title="Ekspor butir soal pada paket yang dipilih ke Excel (.xlsx)"><i class="fa-solid fa-file-export mr-1"></i> Ekspor Soal (${filteredQuestions.length})</button>
                             <button type="button" onclick="window.resetQuestionForm()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"><i class="fa-solid fa-plus mr-1"></i> Soal Baru</button>
                         </div>
                     </div>
@@ -4729,63 +4728,6 @@
         window.downloadQuestionTemplate = function() {
             const headers = ['No', 'Jenis Soal', 'Bobot', 'Stimulus', 'URL Gambar Stimulus (Opsional)', 'Pertanyaan', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Kunci', 'Pembahasan'];
             window.downloadExcelFile('Template_Soal_CBT.xlsx', headers, [[1, 'pg', 10, '', '', 'Contoh soal?', 'Pilihan A', 'Pilihan B', 'Pilihan C', 'Pilihan D', 'A', 'Pembahasan']]);
-        };
-
-        window.exportQuestionsExcel = function() {
-            const selectedBank = appData.filters.questionBankId || 'ALL';
-            const questionsToExport = appData.questions
-                .filter(q => selectedBank === 'ALL' || String(q.bankId) === String(selectedBank))
-                .sort((a, b) => (Number(a.orderNum) || 0) - (Number(b.orderNum) || 0));
-
-            if (questionsToExport.length === 0) {
-                window.showModal('Data Kosong', 'Belum ada butir soal pada paket yang dipilih untuk diekspor.', 'info');
-                return;
-            }
-
-            const headers = ['No', 'Jenis Soal', 'Bobot', 'Stimulus', 'URL Gambar Stimulus (Opsional)', 'Pertanyaan', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Kunci', 'Pembahasan'];
-            const rows = questionsToExport.map((q, idx) => {
-                const opts = [0, 1, 2, 3].map(i => {
-                    if (Array.isArray(q.options) && q.options[i] !== undefined && String(q.options[i]).trim() !== '') {
-                        return String(q.options[i]);
-                    }
-                    if (q.type === 'matching' && Array.isArray(q.matchingPairs) && q.matchingPairs[i]) {
-                        return `${q.matchingPairs[i].left || ''} = ${q.matchingPairs[i].right || ''}`.trim();
-                    }
-                    return '';
-                });
-
-                let keyText = '';
-                if (Array.isArray(q.correctAnswer)) {
-                    keyText = q.correctAnswer.join(', ');
-                } else if (q.type === 'matching') {
-                    keyText = formatMatchingKeyReadable(q.matchingPairs, q.correctAnswer);
-                } else if (q.correctAnswer && typeof q.correctAnswer === 'object') {
-                    keyText = JSON.stringify(q.correctAnswer);
-                } else {
-                    keyText = String(q.correctAnswer ?? '');
-                }
-
-                return [
-                    q.orderNum || (idx + 1),
-                    q.type || 'pg',
-                    Number(q.weight) || 10,
-                    q.stimulusText || '',
-                    q.stimulusImage || '',
-                    q.questionText || '',
-                    opts[0],
-                    opts[1],
-                    opts[2],
-                    opts[3],
-                    keyText,
-                    q.explanation || ''
-                ];
-            });
-
-            const bankObj = selectedBank !== 'ALL' ? appData.questionBanks.find(b => String(b.id) === String(selectedBank)) : null;
-            const rawTitle = bankObj ? String(bankObj.title || 'Paket_Bank_Soal') : 'Semua_Paket';
-            const safeTitle = rawTitle.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'Bank_Soal';
-            window.downloadExcelFile(`Bank_Soal_${safeTitle}.xlsx`, headers, rows);
-            logActivity(`Mengekspor ${questionsToExport.length} butir soal (${bankObj ? bankObj.title : 'Semua Paket'}) ke Excel.`);
         };
 
         window.triggerQuestionExcelImport = function() {
