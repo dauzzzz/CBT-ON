@@ -55,7 +55,6 @@
         }
         .font-poppins { font-family: 'Poppins', sans-serif; }
 
-        /* Full-Page Overlay untuk Menutupi Elemen Bawaan Blogger Tanpa Edit XML */
         .cbt-fullpage-shell {
             position: fixed;
             inset: 0;
@@ -103,7 +102,6 @@
         }
         .katex { font-size: 1.08em; }
 
-        /* Tata Letak Navigasi Responsif: Desktop Fixed Sidebar vs Mobile Floating Bottom Nav */
         #adminSidebar {
             width: 16rem;
             flex-shrink: 0;
@@ -324,7 +322,7 @@
         </div>
     </div>
 
-    <!-- Script Utama Aplikasi (ES Module + Supabase JS SDK) -->
+    <!-- Script Utama Aplikasi (ES Module + Supabase JS SDK — Dioptimalkan Hemat Egress) -->
     <script type="module">
         import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 
@@ -332,11 +330,11 @@
         // KONFIGURASI DEPLOYMENT SUPABASE
         // ============================================================================
         const IS_PREVIEW = false;
-        const SUPABASE_URL = "https://meuwliiaeaqfbmbsbyfc.supabase.co";
-        const SUPABASE_ANON_KEY = "sb_publishable_tqxwSgLur6RUemAIrSP8qQ_bkNArq0M";
+        const SUPABASE_URL = "https://fdmhzrfbjplzwonefyya.supabase.co";
+        const SUPABASE_ANON_KEY = "sb_publishable_OMj9lmuFMhabAQdv5ReO7g_ctXS2O49";
         // ============================================================================
 
-        const APP_VERSION = '5.0.0-SUPABASE';
+        const APP_VERSION = '5.1.0-LITE-EGRESS';
         const DEFAULT_SCHOOL_LOGO = 'https://placehold.co/100x100/4f46e5/ffffff?text=SDN';
 
         let supabase = null;
@@ -357,6 +355,167 @@
         let isFetchingStudentsFromCloud = false;
         let isLoginRequestRunning = false;
         let isModalActionRunning = false;
+
+        // ============================================================================
+        // CACHE LOKAL SOAL (LOCALSTORAGE) UNTUK MENGHEMAT EGRESS SUPABASE >95%
+        // ============================================================================
+        const QUESTION_CACHE_PREFIX = 'cbt_q_cache_v1_';
+
+        function getCachedQuestionsForExam(exam) {
+            if (!exam || !exam.id) return null;
+            try {
+                const raw = localStorage.getItem(QUESTION_CACHE_PREFIX + exam.id);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+                    const savedStamp = Number(parsed.updatedAtMs || 0);
+                    const examStamp = Number(exam.updatedAtMs || 0);
+                    // Validasi cache jika tidak lebih lama dari pembaruan ujian
+                    if (examStamp === 0 || savedStamp >= examStamp) {
+                        return parsed.questions;
+                    }
+                }
+            } catch (e) {}
+            return null;
+        }
+
+        function setCachedQuestionsForExam(exam, questionsList) {
+            if (!exam || !exam.id || !Array.isArray(questionsList) || questionsList.length === 0) return;
+            try {
+                localStorage.setItem(QUESTION_CACHE_PREFIX + exam.id, JSON.stringify({
+                    updatedAtMs: Number(exam.updatedAtMs || Date.now()),
+                    questions: questionsList
+                }));
+            } catch (e) {}
+        }
+
+        function clearCachedQuestionsForExam(examId) {
+            if (!examId) return;
+            try {
+                localStorage.removeItem(QUESTION_CACHE_PREFIX + examId);
+            } catch (e) {}
+        }
+
+        // Mengambil soal HANYA untuk 1 paket ujian siswa (dengan cache lokal & jitter anti-serbuan)
+        async function loadScopedQuestionsForExam(exam, forceRefresh = false) {
+            if (!exam) return [];
+            if (!forceRefresh) {
+                const cached = getCachedQuestionsForExam(exam);
+                if (cached) {
+                    cached.forEach(q => upsertLocalRecord('questions', q.id, q));
+                    return cached;
+                }
+            }
+
+            if (IS_PREVIEW || !supabase) {
+                let localList = (exam.questionIds || []).map(qid => appData.questions.find(q => q.id === qid)).filter(Boolean);
+                if (localList.length === 0 && exam.bankId) {
+                    localList = appData.questions.filter(q => q.bankId === exam.bankId);
+                }
+                return localList;
+            }
+
+            let fetched = [];
+            const qIds = Array.isArray(exam.questionIds) ? exam.questionIds.filter(Boolean) : [];
+
+            if (qIds.length > 0) {
+                // Ambil dalam batch maksimal 100 ID agar URL query tidak kepanjangan
+                for (let i = 0; i < qIds.length; i += 100) {
+                    const chunk = qIds.slice(i, i + 100);
+                    const { data, error } = await supabase.from('questions').select('*').in('id', chunk);
+                    if (!error && Array.isArray(data)) {
+                        fetched.push(...data.map(r => mapRowFromDb('questions', r)));
+                    }
+                }
+            } else if (exam.bankId) {
+                const { data, error } = await supabase.from('questions').select('*').eq('bank_id', exam.bankId);
+                if (!error && Array.isArray(data)) {
+                    fetched = data.map(r => mapRowFromDb('questions', r));
+                }
+            }
+
+            if (fetched.length > 0) {
+                fetched.sort((a, b) => (Number(a.orderNum) || 0) - (Number(b.orderNum) || 0));
+                fetched.forEach(q => upsertLocalRecord('questions', q.id, q));
+                setCachedQuestionsForExam(exam, fetched);
+            }
+            return fetched;
+        }
+
+        // Mengambil data ringan khusus siswa yang login (HANYA kelas, mapel, ujian kelasnya, sesi & hasil miliknya)
+        async function fetchStudentScopedInitialData(studentObj) {
+            if (IS_PREVIEW || !supabase || !studentObj) return;
+            const stdId = String(studentObj.studentId || studentObj.id || '').trim();
+            if (!stdId) return;
+
+            const [settingsRes, classesRes, subjectsRes, examsRes, sessionsRes, resultsRes] = await Promise.all([
+                supabase.from('app_settings').select('*').eq('id', 'global').maybeSingle(),
+                supabase.from('classes').select('*'),
+                supabase.from('subjects').select('*'),
+                supabase.from('exams').select('*'),
+                supabase.from('exam_sessions').select('*').eq('student_id', stdId),
+                supabase.from('exam_results').select('*').eq('student_id', stdId)
+            ]);
+
+            if (settingsRes?.data) {
+                appData.settings = { ...appData.settings, ...mapSettingsFromDb(settingsRes.data) };
+            }
+            if (Array.isArray(classesRes?.data)) {
+                appData.classes = classesRes.data.map(r => mapRowFromDb('classes', r));
+            }
+            if (Array.isArray(subjectsRes?.data)) {
+                appData.subjects = subjectsRes.data.map(r => mapRowFromDb('subjects', r));
+            }
+            if (Array.isArray(examsRes?.data)) {
+                appData.exams = examsRes.data.map(r => mapRowFromDb('exams', r));
+            }
+            if (Array.isArray(sessionsRes?.data)) {
+                appData.examSessions = sessionsRes.data.map(r => mapRowFromDb('examSessions', r));
+            }
+            if (Array.isArray(resultsRes?.data)) {
+                appData.examResults = resultsRes.data.map(r => mapRowFromDb('examResults', r));
+            }
+            updateBrowserFaviconAndTitle();
+        }
+
+        // Timer lokal di browser siswa untuk mendeteksi transisi jadwal buka/tutup otomatis (0 Byte Egress)
+        function startStudentLocalScheduleWatcher() {
+            stopStudentLocalScheduleWatcher();
+            scheduleTransitionInterval = setInterval(async () => {
+                if (!appData.currentUser || appData.currentUser.role !== 'student') {
+                    stopStudentLocalScheduleWatcher();
+                    return;
+                }
+                if (isExamWorkspaceActive || isSubmittingFinalExam || isViewingResultReview) return;
+
+                const eligibleExams = appData.exams.filter(e => isExamEligibleForStudent(e, appData.currentUser));
+                const sig = eligibleExams.map(e => `${e.id}:${e.status}:${e.startTime}-${e.endTime}`).sort().join('|');
+
+                if (sig !== lastScheduleStateSignature) {
+                    lastScheduleStateSignature = sig;
+                    // Jika jadwal ujian baru saja terbuka otomatis, muat soalnya 1x (atau dari cache) lalu render portal
+                    for (const ex of eligibleExams) {
+                        if (!getCachedQuestionsForExam(ex)) {
+                            const jitterMs = Math.floor(Math.random() * 3500);
+                            await new Promise(r => setTimeout(r, jitterMs));
+                            await loadScopedQuestionsForExam(ex, false);
+                        }
+                    }
+                    const modalEl = document.getElementById('customModal');
+                    const isModalOpen = modalEl && !modalEl.classList.contains('hidden');
+                    if (!isModalOpen) {
+                        window.renderStudentPortal(false);
+                    }
+                }
+            }, 2000);
+        }
+
+        function stopStudentLocalScheduleWatcher() {
+            if (scheduleTransitionInterval) {
+                clearInterval(scheduleTransitionInterval);
+                scheduleTransitionInterval = null;
+            }
+        }
 
         const PREVIEW_MINIMAL_DATA = {
             settings: {
@@ -429,6 +588,7 @@
             examResults: [],
             activityLogs: []
         };
+        window.appData = appData;
 
         let examTimerInterval = null;
         let periodicAutoSaveInterval = null;
@@ -455,7 +615,7 @@
         function registerDynamicServiceWorker() {
             if (!('serviceWorker' in navigator)) return;
             const swCode = `
-                const CACHE_NAME = 'cbt-sekolah-pwa-v1';
+                const CACHE_NAME = 'cbt-sekolah-pwa-v2';
                 self.addEventListener('install', (event) => {
                     self.skipWaiting();
                 });
@@ -1102,8 +1262,6 @@
             }
         }
 
-        // Pembaruan khusus status login & heartbeat siswa menggunakan UPDATE (bukan UPSERT)
-        // agar selalu kompatibel dengan kebijakan RLS role anon pada tabel students
         async function updateStudentLoginStateInDb(studentId, lockFields) {
             const safeId = String(studentId || '').trim();
             if (!safeId) return false;
@@ -1238,8 +1396,30 @@
         }
 
         // ============================================================================
-        // INISIALISASI SUPABASE & REALTIME SUBSCRIPTION
+        // INISIALISASI SUPABASE & REALTIME SUBSCRIPTION (HEMAT EGRESS)
         // ============================================================================
+
+        // Hanya dijalankan pada halaman Login sebelum pengguna masuk (menghemat >98% Egress)
+        async function fetchLoginLandingLiteData() {
+            if (IS_PREVIEW || !supabase) return;
+            const [settingsRes, classesRes, examsRes] = await Promise.all([
+                supabase.from('app_settings').select('*').eq('id', 'global').maybeSingle(),
+                supabase.from('classes').select('*'),
+                supabase.from('exams').select('*').eq('status', 'Aktif')
+            ]);
+            if (settingsRes?.data) {
+                appData.settings = { ...appData.settings, ...mapSettingsFromDb(settingsRes.data) };
+            }
+            if (Array.isArray(classesRes?.data)) {
+                appData.classes = classesRes.data.map(r => mapRowFromDb('classes', r));
+            }
+            if (Array.isArray(examsRes?.data)) {
+                appData.exams = examsRes.data.map(r => mapRowFromDb('exams', r));
+            }
+            updateBrowserFaviconAndTitle();
+        }
+
+        // Hanya dijalankan ketika Admin atau Guru berhasil login
         async function fetchAllCollectionsFromSupabase() {
             const cols = [
                 'students', 'teachers', 'classes', 'subjects',
@@ -1270,25 +1450,175 @@
             updateBrowserFaviconAndTitle();
         }
 
-        function setupSupabaseRealtimeSubscriptions() {
-            if (IS_PREVIEW || !supabase) return;
-            if (realtimeChannel) {
+        function teardownRealtimeAndPolling() {
+            if (realtimeChannel && supabase) {
                 try { supabase.removeChannel(realtimeChannel); } catch (e) {}
-                realtimeChannel = null;
+            }
+            realtimeChannel = null;
+            if (fallbackPollingInterval) {
+                clearInterval(fallbackPollingInterval);
+                fallbackPollingInterval = null;
+            }
+        }
+
+        function canUseWebSocketsInEnvironment() {
+            if (typeof window === 'undefined' || typeof window.WebSocket === 'undefined') return false;
+            // Hindari error SecurityError saat aplikasi dibuka di sandbox/Canvas iframe yang memblokir WebSocket
+            if (window.location && (window.location.protocol === 'about:' || window.location.protocol === 'data:' || window.location.protocol === 'blob:')) {
+                return false;
+            }
+            try {
+                const isSandboxed = window.self !== window.top && (!window.location.hostname || window.location.hostname === '');
+                if (isSandboxed) return false;
+            } catch (e) {
+                return false;
+            }
+            try {
+                const probe = new window.WebSocket('wss://127.0.0.1:1');
+                probe.onerror = () => {};
+                probe.onclose = () => {};
+                probe.close();
+                return true;
+            } catch (err) {
+                return false;
+            }
+        }
+
+        // Kanal Realtime Spesifik untuk SISWA: HANYA memantau 1 baris akun siswa ini + status ujian (`exams`)
+        // Tidak menyadap exam_sessions / exam_results / questions agar tidak terjadi siaran massal antarsiswa!
+        function setupStudentTargetedRealtime(studentId) {
+            if (IS_PREVIEW || !supabase || !studentId) return;
+            teardownRealtimeAndPolling();
+
+            const safeStudentId = String(studentId).trim();
+
+            const startStudentLightPolling = () => {
+                if (fallbackPollingInterval) clearInterval(fallbackPollingInterval);
+                fallbackPollingInterval = setInterval(async () => {
+                    if (!supabase || document.hidden || !appData.currentUser || appData.currentUser.role !== 'student') return;
+                    try {
+                        const { data: examRows } = await supabase.from('exams').select('*');
+                        if (Array.isArray(examRows)) {
+                            appData.exams = examRows.map(r => mapRowFromDb('exams', r));
+                            if (isExamWorkspaceActive && currentActiveExam) {
+                                const updatedExam = appData.exams.find(x => x.id === currentActiveExam.id);
+                                if (!updatedExam || !isExamStrictlyActive(updatedExam) || !checkExamScheduleAccess(updatedExam).allowed) {
+                                    window.forceCloseStudentExamByAdmin('Ujian ini baru saja ditutup atau dinonaktifkan oleh Administrator. Seluruh jawaban Anda tetap tersimpan aman.');
+                                    return;
+                                }
+                            } else if (!isSubmittingFinalExam && !isViewingResultReview) {
+                                const eligibleNow = appData.exams.filter(e => isExamEligibleForStudent(e, appData.currentUser));
+                                for (const ex of eligibleNow) {
+                                    if (!getCachedQuestionsForExam(ex)) {
+                                        await loadScopedQuestionsForExam(ex, false);
+                                    }
+                                }
+                                const modalEl = document.getElementById('customModal');
+                                if (!modalEl || modalEl.classList.contains('hidden')) {
+                                    window.renderStudentPortal(false);
+                                }
+                            }
+                        }
+                    } catch (e) {}
+                }, 30000);
+            };
+
+            if (!canUseWebSocketsInEnvironment()) {
+                updateLiveSyncIndicator('idle');
+                startStudentLightPolling();
+                return;
             }
 
-            const isWebSocketAllowed = (() => {
-                if (typeof window === 'undefined' || typeof window.WebSocket === 'undefined') return false;
-                try {
-                    const testSocket = new window.WebSocket('wss://127.0.0.1:1');
-                    testSocket.onerror = () => {};
-                    testSocket.onclose = () => {};
-                    testSocket.close();
-                    return true;
-                } catch (wsErr) {
-                    return false;
-                }
-            })();
+            try {
+                realtimeChannel = supabase.channel(`cbt-student-lite-${safeStudentId}`);
+
+                // 1. Pantau HANYA 1 baris siswa ini untuk Reset Login instan oleh Admin
+                realtimeChannel.on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public', table: 'students', filter: `id=eq.${safeStudentId}` },
+                    (payload) => {
+                        if (!appData.currentUser || appData.currentUser.role !== 'student') return;
+                        if (payload.eventType === 'DELETE') {
+                            handleForcedStudentLogout('Akun siswa Anda telah dihapus oleh Administrator.');
+                            return;
+                        }
+                        const remoteRow = payload.new ? mapRowFromDb('students', payload.new) : null;
+                        if (!remoteRow || remoteRow.status !== 'Aktif') {
+                            handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan oleh Administrator.');
+                            return;
+                        }
+                        if (
+                            remoteRow.isLoggedIn === false ||
+                            (remoteRow.activeSessionId && remoteRow.activeSessionId !== currentDeviceSessionId)
+                        ) {
+                            handleForcedStudentLogout('Sesi login akun Anda telah direset oleh Pengawas / Administrator.');
+                        }
+                    }
+                );
+
+                // 2. Pantau tabel `exams` untuk tombol Aktifkan / Tutup Ujian secara instan
+                realtimeChannel.on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public', table: 'exams' },
+                    async (payload) => {
+                        if (!appData.currentUser || appData.currentUser.role !== 'student') return;
+                        const evType = payload.eventType;
+                        if (evType === 'DELETE') {
+                            if (payload.old?.id) {
+                                clearCachedQuestionsForExam(String(payload.old.id));
+                                removeLocalRecord('exams', String(payload.old.id));
+                            }
+                        } else if (payload.new) {
+                            const mappedExam = mapRowFromDb('exams', payload.new);
+                            upsertLocalRecord('exams', mappedExam.id, mappedExam);
+                            if (!isExamStrictlyActive(mappedExam)) {
+                                clearCachedQuestionsForExam(mappedExam.id);
+                            }
+                        }
+
+                        // Jika siswa sedang mengerjakan ujian dan Admin menutupnya -> tutup & simpan otomatis
+                        if (isExamWorkspaceActive && currentActiveExam) {
+                            const updatedExam = appData.exams.find(x => x.id === currentActiveExam.id);
+                            if (!updatedExam || !isExamStrictlyActive(updatedExam) || !checkExamScheduleAccess(updatedExam).allowed) {
+                                window.forceCloseStudentExamByAdmin('Ujian ini baru saja ditutup atau dinonaktifkan oleh Administrator. Seluruh jawaban yang sudah Anda isi tetap tersimpan dengan aman.');
+                                return;
+                            }
+                        }
+
+                        // Jika siswa di portal -> langsung munculkan/sembunyikan kartu ujian
+                        if (!isExamWorkspaceActive && !isSubmittingFinalExam && !isViewingResultReview) {
+                            const eligibleNow = appData.exams.filter(e => isExamEligibleForStudent(e, appData.currentUser));
+                            for (const ex of eligibleNow) {
+                                if (!getCachedQuestionsForExam(ex)) {
+                                    await loadScopedQuestionsForExam(ex, false);
+                                }
+                            }
+                            const modalEl = document.getElementById('customModal');
+                            const isModalOpen = modalEl && !modalEl.classList.contains('hidden');
+                            if (!isModalOpen) {
+                                window.renderStudentPortal(false);
+                            }
+                        }
+                    }
+                );
+
+                realtimeChannel.subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        updateLiveSyncIndicator('idle');
+                    }
+                });
+            } catch (rtErr) {
+                console.warn('Realtime siswa dialihkan ke polling ringan:', rtErr?.message || rtErr);
+                teardownRealtimeAndPolling();
+            }
+
+            startStudentLightPolling();
+        }
+
+        // Kanal Realtime Lengkap KHUSUS untuk ADMIN / PENGAWAS (jumlah admin sedikit sehingga Egress tetap rendah)
+        function setupAdminRealtimeSubscriptions() {
+            if (IS_PREVIEW || !supabase) return;
+            teardownRealtimeAndPolling();
 
             const startFallbackPolling = () => {
                 if (fallbackPollingInterval) clearInterval(fallbackPollingInterval);
@@ -1303,14 +1633,16 @@
                                 appData[cName] = data.map(r => mapRowFromDb(cName, r));
                             }
                         }));
+                        if (window.isStaffUser(appData.currentUser) && !isUserTypingInFilterInput() && appData.activeAdminMenu !== 'questionBanks') {
+                            window.renderAdminCurrentSection();
+                        }
                     } catch (e) {}
-                }, 60000);
+                }, 30000);
             };
 
-            if (!isWebSocketAllowed) {
-                setTimeout(() => {
-                    isInitialRealtimeLoad = false;
-                }, 800);
+            if (!canUseWebSocketsInEnvironment()) {
+                isInitialRealtimeLoad = false;
+                updateLiveSyncIndicator('idle');
                 startFallbackPolling();
                 return;
             }
@@ -1329,7 +1661,7 @@
             };
 
             try {
-                realtimeChannel = supabase.channel('cbt-sekolah-realtime-all');
+                realtimeChannel = supabase.channel('cbt-admin-realtime-monitor');
 
                 Object.entries(tableToCol).forEach(([tableName, colName]) => {
                     realtimeChannel.on(
@@ -1343,51 +1675,6 @@
                             } else if (payload.new) {
                                 const mapped = mapRowFromDb(colName, payload.new);
                                 upsertLocalRecord(colName, mapped.id, mapped);
-                            }
-
-                            if (colName === 'students' && appData.currentUser && appData.currentUser.role === 'student') {
-                                const changedId = String(payload.new?.id || payload.old?.id || '');
-                                if (changedId === String(appData.currentUser.studentId)) {
-                                    if (evType === 'DELETE') {
-                                        handleForcedStudentLogout('Akun siswa Anda telah dihapus oleh Administrator.');
-                                        return;
-                                    }
-                                    const remoteRow = payload.new ? mapRowFromDb('students', payload.new) : null;
-                                    if (remoteRow && remoteRow.status !== 'Aktif') {
-                                        handleForcedStudentLogout('Akun siswa Anda telah dinonaktifkan oleh Administrator.');
-                                        return;
-                                    }
-                                    if (
-                                        remoteRow &&
-                                        (remoteRow.isLoggedIn === false ||
-                                            (remoteRow.activeSessionId && remoteRow.activeSessionId !== currentDeviceSessionId))
-                                    ) {
-                                        handleForcedStudentLogout('Sesi login akun Anda telah direset oleh Pengawas / Administrator.');
-                                        return;
-                                    }
-                                }
-                            }
-
-                            if (colName === 'exams' && appData.currentUser && appData.currentUser.role === 'student' && isExamWorkspaceActive && currentActiveExam) {
-                                const updatedExam = appData.exams.find(x => x.id === currentActiveExam.id);
-                                if (!updatedExam || !isExamStrictlyActive(updatedExam) || !checkExamScheduleAccess(updatedExam).allowed) {
-                                    window.forceCloseStudentExamByAdmin('Ujian ini baru saja ditutup atau dinonaktifkan oleh Administrator. Seluruh jawaban yang sudah Anda isi tetap tersimpan dengan aman.');
-                                    return;
-                                }
-                            }
-
-                            if (isExamWorkspaceActive && colName === 'examSessions' && payload.new?.id === currentSessionId) {
-                                const remoteSess = mapRowFromDb('examSessions', payload.new);
-                                if (remoteSess.status === 'SUBMITTED') {
-                                    window.stopAllExamTimersAndWatchers();
-                                    window.autoLogoutStudentToInitialLogin('Ujian Telah Selesai', 'Sesi ujian ini telah diselesaikan dan dikirim.', 'info');
-                                    return;
-                                }
-                                if (remoteSess.sessionToken && currentSessionToken && remoteSess.sessionToken !== currentSessionToken) {
-                                    window.stopAllExamTimersAndWatchers();
-                                    window.autoLogoutStudentToInitialLogin('Sesi Berpindah ke Perangkat Lain', `Ujian dibuka pada perangkat lain (${remoteSess.deviceInfo || 'Perangkat Baru'}).`, 'error');
-                                    return;
-                                }
                             }
 
                             if (!isInitialRealtimeLoad) {
@@ -1417,11 +1704,8 @@
                     }
                 });
             } catch (rtErr) {
-                console.warn('Realtime WebSocket tidak tersedia, menggunakan polling:', rtErr?.message || rtErr);
-                if (realtimeChannel) {
-                    try { supabase.removeChannel(realtimeChannel); } catch (e) {}
-                    realtimeChannel = null;
-                }
+                console.warn('Realtime Admin tidak tersedia, menggunakan polling:', rtErr?.message || rtErr);
+                teardownRealtimeAndPolling();
             }
 
             setTimeout(() => {
@@ -1453,8 +1737,9 @@
                 }
             });
 
-            await fetchAllCollectionsFromSupabase();
-            setupSupabaseRealtimeSubscriptions();
+            // Saat halaman pertama dibuka, muat data ringan saja (app_settings, classes, exams aktif)
+            // Data penuh hanya diambil setelah Admin/Guru berhasil login!
+            await fetchLoginLandingLiteData();
             return true;
         }
 
@@ -1638,6 +1923,7 @@
                 }
             } catch (e) {}
 
+            // Interval heartbeat 45 detik (hemat egress namun tetap di bawah batas timeout 90 detik)
             studentHeartbeatInterval = setInterval(async () => {
                 if (!appData.currentUser || appData.currentUser.role !== 'student') {
                     stopStudentHeartbeat();
@@ -1646,7 +1932,6 @@
                 const studentId = String(appData.currentUser.studentId || '').trim();
                 if (!studentId) return;
 
-                // Verifikasi langsung ke Supabase sebelum memutuskan sesi direset (hindari salah reset karena cache lokal / gangguan jaringan)
                 if (!IS_PREVIEW && supabase) {
                     try {
                         const { data: liveRow, error } = await supabase
@@ -1669,7 +1954,6 @@
                             }
                         }
                     } catch (hbErr) {
-                        // Jangan keluarkan siswa saat koneksi internet sedang tidak stabil sementara
                         return;
                     }
                 }
@@ -1680,7 +1964,7 @@
                     lastHeartbeatAt: Date.now(),
                     deviceInfo: (navigator.userAgent || getDeviceLabel()).slice(0, 120)
                 });
-            }, 25000);
+            }, 45000);
         }
 
         function stopStudentHeartbeat() {
@@ -1700,6 +1984,8 @@
                 await window.persistExamSessionToCloud(true);
             }
             stopStudentHeartbeat();
+            stopStudentLocalScheduleWatcher();
+            teardownRealtimeAndPolling();
             window.stopAllExamTimersAndWatchers();
             isViewingResultReview = false;
             appData.currentUser = null;
@@ -1793,7 +2079,7 @@
                     badge.innerHTML = `<i class="fa-solid fa-wifi text-[10px]"></i> <span>Mode Rekoneksi...</span>`;
                 } else {
                     badge.className = 'live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[11px] font-bold flex items-center gap-1.5 transition-all';
-                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview Lokal' : 'Supabase Live'}</span>`;
+                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview Lokal' : 'Supabase Live (Hemat)'}</span>`;
                 }
             });
 
@@ -2226,6 +2512,7 @@
                     sessionId: currentDeviceSessionId
                 };
                 startStudentHeartbeat();
+                startStudentLocalScheduleWatcher();
                 window.renderStudentPortal(true);
             }
         };
@@ -2240,7 +2527,7 @@
                     <p class="text-white font-bold text-sm">${escapeHtml(activeExams[0].examName)}</p>
                     <p class="text-indigo-200 text-xs mt-1">Kelas: <strong>${escapeHtml(getClassNameById(activeExams[0].classId))}</strong> | Token: <span class="font-mono bg-indigo-950/80 px-2 py-0.5 rounded text-cyan-300 font-bold">${escapeHtml(activeExams[0].token)}</span></p>
                    </div>`
-                : `<div class="mt-6 p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-indigo-200">Belum ada ujian berstatus Aktif saat ini.</div>`;
+                : `<div class="mt-6 p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-indigo-200">Silakan masuk dengan akun siswa Anda untuk melihat jadwal ujian kelas.</div>`;
 
             const previewBadgeHtml = IS_PREVIEW
                 ? `<div class="mb-4 p-3 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs space-y-2">
@@ -2388,7 +2675,7 @@
             }
         }
 
-        // Login Siswa: Validasi langsung ke tabel `students` di Supabase (bukan Supabase Auth)
+        // Login Siswa: Validasi ke tabel `students` + muat data khusus siswa tersebut saja (Hemat Egress)
         window.handleStudentLogin = async function() {
             if (isLoginRequestRunning) return;
             const username = (document.getElementById('loginStudentUsername')?.value || '').trim();
@@ -2446,14 +2733,34 @@
 
                 window.enterStudentFullscreen();
 
-                const activeOtherExamSess = (appData.examSessions || []).find(ss =>
-                    (ss.studentId === matchedStudent.id || (matchedStudent.nisn && String(ss.nisn) === String(matchedStudent.nisn))) &&
-                    ss.status === 'IN_PROGRESS' &&
-                    ss.deviceSessionId &&
-                    ss.deviceSessionId !== currentDeviceSessionId &&
-                    ss.updatedAtMs &&
-                    (Date.now() - Number(ss.updatedAtMs)) < STUDENT_LOCK_TIMEOUT_MS
-                );
+                // Cek sesi aktif milik siswa ini saja (1 query ringan, bukan menarik seluruh tabel)
+                let activeOtherExamSess = null;
+                if (!IS_PREVIEW && supabase) {
+                    const { data: stdSessRows } = await supabase
+                        .from('exam_sessions')
+                        .select('*')
+                        .eq('student_id', matchedStudent.id)
+                        .eq('status', 'IN_PROGRESS');
+                    if (Array.isArray(stdSessRows)) {
+                        const mappedSess = stdSessRows.map(r => mapRowFromDb('examSessions', r));
+                        mappedSess.forEach(s => upsertLocalRecord('examSessions', s.id, s));
+                        activeOtherExamSess = mappedSess.find(ss =>
+                            ss.deviceSessionId &&
+                            ss.deviceSessionId !== currentDeviceSessionId &&
+                            ss.updatedAtMs &&
+                            (Date.now() - Number(ss.updatedAtMs)) < STUDENT_LOCK_TIMEOUT_MS
+                        ) || null;
+                    }
+                } else {
+                    activeOtherExamSess = (appData.examSessions || []).find(ss =>
+                        (ss.studentId === matchedStudent.id || (matchedStudent.nisn && String(ss.nisn) === String(matchedStudent.nisn))) &&
+                        ss.status === 'IN_PROGRESS' &&
+                        ss.deviceSessionId &&
+                        ss.deviceSessionId !== currentDeviceSessionId &&
+                        ss.updatedAtMs &&
+                        (Date.now() - Number(ss.updatedAtMs)) < STUDENT_LOCK_TIMEOUT_MS
+                    ) || null;
+                }
 
                 if (isStudentRecordLockedByOther(matchedStudent, currentDeviceSessionId) || activeOtherExamSess) {
                     const lockedDevInfo = matchedStudent.deviceInfo || (activeOtherExamSess ? activeOtherExamSess.deviceInfo : 'Perangkat / Tab Lain');
@@ -2494,7 +2801,16 @@
                     sessionId: currentDeviceSessionId
                 };
 
+                // Muat HANYA data ujian, sesi, hasil, dan soal untuk siswa & kelas ini
+                await fetchStudentScopedInitialData(appData.currentUser);
+                const eligibleNow = appData.exams.filter(e => isExamEligibleForStudent(e, appData.currentUser));
+                for (const ex of eligibleNow) {
+                    await loadScopedQuestionsForExam(ex, false);
+                }
+
+                setupStudentTargetedRealtime(matchedStudent.id);
                 startStudentHeartbeat();
+                startStudentLocalScheduleWatcher();
                 window.renderStudentPortal(true);
             } finally {
                 isLoginRequestRunning = false;
@@ -2506,7 +2822,7 @@
             }
         };
 
-        // Login Admin / Guru: Wajib menggunakan Supabase Auth (`signInWithPassword`) saat IS_PREVIEW = false
+        // Login Admin / Guru: Menggunakan Supabase Auth + memuat data manajemen lengkap
         window.handleAdminLogin = async function() {
             if (isLoginRequestRunning) return;
             const email = (document.getElementById('loginAdminEmail')?.value || '').trim();
@@ -2541,6 +2857,7 @@
                 }
 
                 await fetchAllCollectionsFromSupabase();
+                setupAdminRealtimeSubscriptions();
 
                 const authEmailLower = String(data.user.email || email).toLowerCase();
                 const matchedTeacher = (appData.teachers || []).find(t =>
@@ -2608,6 +2925,8 @@
                 : null;
 
             stopStudentHeartbeat();
+            stopStudentLocalScheduleWatcher();
+            teardownRealtimeAndPolling();
             window.stopAllExamTimersAndWatchers();
             window.closeModal();
 
@@ -2653,6 +2972,8 @@
 
             window.clearStaffSession();
             stopStudentHeartbeat();
+            stopStudentLocalScheduleWatcher();
+            teardownRealtimeAndPolling();
             window.stopAllExamTimersAndWatchers();
             isExamWorkspaceActive = false;
             isViewingResultReview = false;
@@ -2818,7 +3139,7 @@
                             </div>
                             <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                                 <div class="live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50/80 border border-emerald-200/80 text-emerald-700 text-[10px] sm:text-[11px] font-bold flex items-center gap-1.5 transition-all">
-                                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview' : 'Supabase Live'}</span>
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> <span>${IS_PREVIEW ? 'Preview' : 'Supabase Live (Hemat)'}</span>
                                 </div>
                                 <button type="button" onclick="window.logoutApp()" class="px-2.5 sm:px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
                                     <i class="fa-solid fa-right-from-bracket"></i> <span class="hidden sm:inline">Logout</span>
@@ -3373,13 +3694,11 @@
             const allValidResults = getValidExamResults('ALL');
             const examFilteredResults = getValidExamResults(filterExamId);
 
-            // Bersihkan ID hasil terpilih yang sudah tidak ada
             const validResIdSet = new Set(allValidResults.map(r => r.resultId || r.id));
             Array.from(selectedResultIds).forEach(id => {
                 if (!validResIdSet.has(id)) selectedResultIds.delete(id);
             });
 
-            // Gabungkan data hasil ujian (Selesai) dengan status siswa Sedang Mengerjakan & Belum Login saat filter status dipilih
             const activeExamObj = filterExamId !== 'ALL' ? appData.exams.find(e => e.id === filterExamId) : null;
             const inProgressSessions = (appData.examSessions || []).filter(ss =>
                 ss.status === 'IN_PROGRESS' && (filterExamId === 'ALL' || ss.examId === filterExamId)
@@ -3892,7 +4211,6 @@
 
             const bodyContentOnly = `
                 <div style="font-family:'Inter',Arial,sans-serif;color:#0f172a;width:100%;max-width:${isLandscape ? '1080px' : '780px'};margin:0 auto;">
-                    <!-- Kop Laporan Resmi -->
                     <div style="display:flex;align-items:center;gap:14px;border-bottom:3px double #1e293b;padding-bottom:10px;margin-bottom:14px;">
                         <img src="${escapeHtml(logoSrc)}" onerror="this.style.display='none'" style="width:52px;height:52px;object-fit:contain;border-radius:10px;border:1px solid #e2e8f0;padding:3px;background:#fff;flex-shrink:0;">
                         <div style="flex:1;text-align:center;">
@@ -3902,13 +4220,11 @@
                         </div>
                     </div>
 
-                    <!-- Judul & Metadata Laporan -->
                     <div style="text-align:center;margin-bottom:12px;">
                         <h2 style="margin:0;font-size:14.5px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:#1e293b;">LAPORAN REKAPITULASI HASIL UJIAN</h2>
                         <p style="margin:4px 0 0 0;font-size:11.5px;color:#475569;">Paket Ujian: <strong style="color:#0f172a;">${escapeHtml(titleLabel)}</strong> &nbsp;|&nbsp; Dicetak: <strong>${escapeHtml(printDateStr)}</strong></p>
                     </div>
 
-                    <!-- Kartu Ringkasan Statistik -->
                     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
                         <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:8px;text-align:center;">
                             <div style="font-size:9.5px;font-weight:700;text-transform:uppercase;color:#64748b;">Total Peserta</div>
@@ -3928,7 +4244,6 @@
                         </div>
                     </div>
 
-                    <!-- Tabel Nilai -->
                     <table style="width:100%;border-collapse:collapse;font-size:${fontSizeTable};table-layout:auto;">
                         <thead style="display:table-header-group;">
                             <tr>
@@ -3945,7 +4260,6 @@
                         <tbody>${rowsHtml}</tbody>
                     </table>
 
-                    <!-- Keterangan Kolom B / P / S / K -->
                     <div style="margin-top:8px;font-size:10px;color:#475569;">
                         <strong>Keterangan:</strong>
                         <span style="color:#047857;font-weight:700;">B</span> = Benar &nbsp;|&nbsp;
@@ -3954,7 +4268,6 @@
                         <span style="color:#64748b;font-weight:700;">K</span> = Kosong / Tidak Dijawab
                     </div>
 
-                    <!-- Blok Tanda Tangan -->
                     <div style="display:flex;justify-content:flex-end;margin-top:24px;page-break-inside:avoid;break-inside:avoid;">
                         <div style="text-align:center;min-width:220px;font-size:11.5px;color:#1e293b;">
                             <div>${escapeHtml(printDateStr)}</div>
@@ -4256,37 +4569,6 @@
                 renderStudentsContent(document.getElementById('adminMainContent'), true);
                 return true;
             }, { showCancel: true, okText: 'Hapus' });
-        };
-
-        window.unlockStudentLogin = async function(studentId, silent = false) {
-            const std = appData.students.find(s => String(s._docId || s.id) === String(studentId));
-            if (!std) return;
-            std.isLoggedIn = false;
-            std.activeSessionId = '';
-            std.lastHeartbeatAt = 0;
-            await syncCollectionRecord('students', std.id, std);
-            if (!silent) {
-                window.renderAdminCurrentSection();
-                window.showModal('Reset Login Berhasil', `Kunci login ${std.fullName} telah dibebaskan.`, 'success');
-            }
-        };
-
-        window.unlockAllStudentsLogin = function() {
-            const lockedCount = appData.students.filter(s => isStudentCurrentlyLoggedIn(s) || s.isLoggedIn || s.activeSessionId).length;
-            if (lockedCount === 0) return;
-            window.showModal('Reset Semua Login Siswa', `Bebaskan kunci login untuk ${lockedCount} akun siswa yang sedang aktif?`, 'info', async (confirmed) => {
-                if (!confirmed) return true;
-                const updates = appData.students.filter(s => s.isLoggedIn || s.activeSessionId).map(s => ({
-                    ...s,
-                    isLoggedIn: false,
-                    activeSessionId: '',
-                    lastHeartbeatAt: 0
-                }));
-                if (updates.length > 0) await bulkSyncCollectionRecords('students', updates, false);
-                window.renderAdminCurrentSection();
-                window.showModal('Berhasil', 'Kunci login siswa telah direset.', 'success');
-                return true;
-            }, { showCancel: true, okText: 'Ya, Reset Semua' });
         };
 
         // ============================================================================
@@ -4715,8 +4997,9 @@
                         ex.questionIds = Array.isArray(ex.questionIds) ? ex.questionIds : [];
                         if (!ex.questionIds.includes(docId)) {
                             ex.questionIds.push(docId);
-                            await syncCollectionRecord('exams', ex.id, ex);
                         }
+                        ex.updatedAtMs = Date.now();
+                        await syncCollectionRecord('exams', ex.id, ex);
                     }
                 }
                 window.showModal('Berhasil', 'Butir soal disimpan ke Supabase.', 'success');
@@ -4862,6 +5145,7 @@
                                 newRecords.forEach(nq => {
                                     if (!ex.questionIds.includes(nq.id)) ex.questionIds.push(nq.id);
                                 });
+                                ex.updatedAtMs = Date.now();
                                 await syncCollectionRecord('exams', ex.id, ex);
                             }
                         }
@@ -4941,9 +5225,9 @@
             const endMs = Date.UTC(eP[0], eP[1] - 1, eP[2], eT[0] - 7, eT[1], 59, 999);
             const nowMs = Date.now();
 
-            if (!isNaN(startMs) && nowMs < startMs) return { allowed: false, state: 'UPCOMING', message: 'Ujian belum dimulai.' };
-            if (!isNaN(endMs) && nowMs > endMs) return { allowed: false, state: 'EXPIRED', message: 'Waktu ujian telah berakhir.' };
-            return { allowed: true, state: 'ONGOING', message: '' };
+            if (!isNaN(startMs) && nowMs < startMs) return { allowed: false, state: 'UPCOMING', message: 'Ujian belum dimulai.', startMs, endMs };
+            if (!isNaN(endMs) && nowMs > endMs) return { allowed: false, state: 'EXPIRED', message: 'Waktu ujian telah berakhir.', startMs, endMs };
+            return { allowed: true, state: 'ONGOING', message: '', startMs, endMs };
         }
 
         function isExamEligibleForStudent(exam, student) {
@@ -4969,9 +5253,6 @@
             return byDurationMs;
         }
 
-        // ============================================================================
-        // FITUR PENGACAK URUTAN SOAL PER SISWA (ON / OFF PER PAKET UJIAN)
-        // ============================================================================
         function getRandomizeConfigState() {
             const raw = String(appData.settings.gasWebhookUrl || '').trim();
             if (raw.startsWith('CBT_CFG:')) {
@@ -5020,8 +5301,6 @@
             window.renderAdminCurrentSection();
         };
 
-        // Pengacakan deterministik berbasis (examId + studentId) agar nomor soal tiap siswa berbeda
-        // namun urutan tetap konsisten saat siswa melanjutkan ujian / pindah perangkat
         function shuffleQuestionsForStudent(questionsList, examId, studentKey) {
             const arr = Array.isArray(questionsList) ? [...questionsList] : [];
             if (arr.length <= 1) return arr;
@@ -5433,6 +5712,9 @@
                 </div>
             `;
         }
+        window.renderParticipantsContent = renderParticipantsContent;
+        window.renderStudentsContent = renderStudentsContent;
+        window.renderResultsContent = renderResultsContent;
 
         window.unlockStudentLogin = async function(studentId, silent = false) {
             const std = appData.students.find(s => String(s._docId || s.id) === String(studentId));
@@ -5448,7 +5730,6 @@
                 deviceInfo: ''
             });
 
-            // Bersihkan juga kunci perangkat pada sesi ujian aktif milik siswa ini agar badge Login Terkunci langsung hilang
             const relatedSessions = (appData.examSessions || []).filter(ss =>
                 String(ss.studentId) === String(std.id) || (std.nisn && String(ss.nisn) === String(std.nisn))
             );
@@ -6252,7 +6533,7 @@
         window.scheduleAutoSave = function(immediate = false) {
             if (autoSaveDebounceTimer) clearTimeout(autoSaveDebounceTimer);
             if (immediate) window.persistExamSessionToCloud();
-            else autoSaveDebounceTimer = setTimeout(() => window.persistExamSessionToCloud(), 350);
+            else autoSaveDebounceTimer = setTimeout(() => window.persistExamSessionToCloud(), 500);
         };
 
         window.renderStudentPortal = function(checkActivePrompt = false) {
@@ -6266,6 +6547,12 @@
             }
 
             const availableExams = appData.exams.filter(e => isExamEligibleForStudent(e, student));
+            const upcomingExams = appData.exams.filter(e =>
+                isExamStrictlyActive(e) &&
+                isExamMatchingStudentClass(e, student) &&
+                checkExamScheduleAccess(e).state === 'UPCOMING'
+            );
+
             let unfinishedSessionToPrompt = null;
 
             const examCards = availableExams.map(ex => {
@@ -6295,6 +6582,16 @@
                 `;
             }).join('');
 
+            const upcomingBannerHtml = upcomingExams.length > 0
+                ? `<div class="glass-panel rounded-3xl p-5 border border-blue-200 bg-blue-50/70 text-blue-900 space-y-2">
+                    <p class="text-xs font-extrabold uppercase tracking-wider text-blue-700 flex items-center gap-1.5"><i class="fa-regular fa-clock"></i> Jadwal Ujian Berikutnya (Otomatis Muncul Saat Waktunya)</p>
+                    ${upcomingExams.map(u => `<div class="p-3 bg-white rounded-2xl border border-blue-100 flex flex-wrap justify-between items-center gap-2 text-xs">
+                        <div><strong>${escapeHtml(u.examName)}</strong> (${escapeHtml(getSubjectNameById(u.subjectId))})</div>
+                        <span class="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 font-bold">Mulai: ${escapeHtml(formatIsoToDDMMYYYY(u.startDate))} pukul ${escapeHtml(u.startTime)} WIB</span>
+                    </div>`).join('')}
+                   </div>`
+                : '';
+
             container.innerHTML = `
                 <div class="flex-1 flex flex-col h-full font-poppins bg-gradient-to-br from-blue-50 via-slate-50 to-indigo-50 overflow-y-auto custom-scrollbar">
                     <header class="glass-panel border-b border-slate-200 px-4 sm:px-8 py-3.5 flex justify-between items-center gap-3 shrink-0">
@@ -6306,7 +6603,7 @@
                             </div>
                         </div>
                         <div class="flex items-center gap-2">
-                            <span class="live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">Supabase Live</span>
+                            <span class="live-sync-badge px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">Supabase Live (Hemat)</span>
                             <button type="button" onclick="window.logoutApp()" class="px-4 py-2 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-2xl text-xs font-semibold transition cursor-pointer">Keluar</button>
                         </div>
                     </header>
@@ -6322,9 +6619,10 @@
                                 <strong class="text-xl">${availableExams.length} Paket</strong>
                             </div>
                         </div>
+                        ${upcomingBannerHtml}
                         ${availableExams.length > 0
                             ? `<div class="grid grid-cols-1 md:grid-cols-2 gap-5">${examCards}</div>`
-                            : `<div class="glass-panel rounded-3xl p-8 text-center text-slate-500 text-sm">Belum ada jadwal ujian aktif untuk kelas Anda saat ini.</div>`}
+                            : `<div class="glass-panel rounded-3xl p-8 text-center text-slate-500 text-sm">Belum ada jadwal ujian aktif untuk kelas Anda saat ini. Halaman ini akan otomatis menampilkan soal begitu Admin mengaktifkan ujian atau jadwal tiba.</div>`}
                     </main>
                 </div>
             `;
@@ -6403,8 +6701,10 @@
             }
             const ex = verification.exam;
             currentActiveExam = ex;
-            currentExamQuestions = (ex.questionIds || []).map(qid => appData.questions.find(q => q.id === qid)).filter(Boolean);
-            if (currentExamQuestions.length === 0) currentExamQuestions = appData.questions.filter(q => q.bankId === ex.bankId);
+
+            // Ambil soal dari cache lokal atau 1x query terfilter dari Supabase
+            const scopedQuestions = await loadScopedQuestionsForExam(ex, false);
+            currentExamQuestions = [...scopedQuestions];
             if (currentExamQuestions.length === 0) {
                 window.showModal('Soal Belum Tersedia', 'Paket ujian ini belum memiliki butir soal.', 'error');
                 return;
@@ -6494,11 +6794,12 @@
                 }
             }, 1000);
 
+            // Auto-save periodik tiap 45 detik (hemat beban tulis, tetap aman saat pindah perangkat)
             periodicAutoSaveInterval = setInterval(() => {
                 if (isExamWorkspaceActive && currentActiveExam && !isSubmittingFinalExam) {
                     window.persistExamSessionToCloud();
                 }
-            }, 15000);
+            }, 45000);
         }
 
         function isQuestionAnswered(ans) {
@@ -6582,7 +6883,6 @@
 
             if (!isQuestionAnswered(userAnswer)) return { status: 'EMPTY', earnedWeight: 0, maxWeight, ratio: 0 };
 
-            // 1. Pilihan Ganda Biasa (pg)
             if (qType === 'pg') {
                 const uToken = normalizeSingleChoiceToken(userAnswer);
                 const kToken = normalizeSingleChoiceToken(q.correctAnswer);
@@ -6596,7 +6896,6 @@
                 return { status: isMatch ? 'CORRECT' : 'WRONG', earnedWeight: isMatch ? safeRoundTwoDecimals(maxWeight) : 0, maxWeight, ratio: isMatch ? 1 : 0 };
             }
 
-            // 2. Pilihan Ganda Kompleks (pg_complex): Math.max(0, (benar - salah) / totalKunci) * bobot
             if (qType === 'pg_complex') {
                 const rawKeys = Array.isArray(q.correctAnswer)
                     ? q.correctAnswer
@@ -6616,7 +6915,6 @@
                 return { status, earnedWeight: safeRoundTwoDecimals(ratio * maxWeight), maxWeight, ratio };
             }
 
-            // 3. Benar / Salah (true_false: mendukung tunggal maupun multi-pernyataan)
             if (qType === 'true_false') {
                 const isMulti = isTrueFalseMultiStatementQuestion(q);
                 if (isMulti) {
@@ -6662,7 +6960,6 @@
                 }
             }
 
-            // 4. Menjodohkan (matching): proporsional jumlah pasangan tepat / total pasangan
             if (qType === 'matching') {
                 const expectedMap = {};
                 if (Array.isArray(q.matchingPairs) && q.matchingPairs.length > 0) {
@@ -6693,7 +6990,6 @@
                 return { status: ratio === 1 ? 'CORRECT' : (ratio > 0 ? 'PARTIAL' : 'WRONG'), earnedWeight: safeRoundTwoDecimals(ratio * maxWeight), maxWeight, ratio };
             }
 
-            // 5. Isian Singkat (short_answer)
             if (qType === 'short_answer') {
                 const normStudent = normalizeShortText(userAnswer);
                 const normStudentDot = normStudent.replace(/,/g, '.');
@@ -6714,7 +7010,6 @@
                 return { status: isMatch ? 'CORRECT' : 'WRONG', earnedWeight: isMatch ? safeRoundTwoDecimals(maxWeight) : 0, maxWeight, ratio: isMatch ? 1 : 0 };
             }
 
-            // 6. Uraian / Essay (essay)
             if (qType === 'essay') {
                 if (manualEssayScore !== undefined && manualEssayScore !== null && manualEssayScore !== '') {
                     const numericManual = Number(manualEssayScore);
@@ -7008,7 +7303,6 @@
 
             container.innerHTML = `
                 <div class="flex-1 flex flex-col h-full min-h-0 bg-white overflow-hidden select-none font-poppins">
-                    <!-- Header Ruang Ujian -->
                     <header class="bg-gradient-to-r from-[#0b132b] via-[#101c3d] to-[#0b132b] text-white px-4 sm:px-6 py-2.5 flex flex-wrap justify-between items-center gap-3 shrink-0 border-b border-slate-800 shadow-md">
                         <div class="flex items-center gap-3 min-w-0">
                             <img src="${escapeHtml(appData.settings.schoolLogo || DEFAULT_SCHOOL_LOGO)}" onerror="this.src='${DEFAULT_SCHOOL_LOGO}'" alt="Logo" class="w-10 h-10 rounded-full bg-white object-contain p-0.5 shrink-0 border border-blue-400/40 shadow-sm">
@@ -7048,7 +7342,6 @@
                         </div>
                     </header>
 
-                    <!-- Bar Nomor Tiap Soal Khusus HP (Tetap Terlihat di Atas Saat Menggulir Stimulus/Soal) -->
                     <div class="lg:hidden bg-white border-b border-slate-200 px-3 py-2 space-y-2 shrink-0 shadow-2xs z-10">
                         <div class="flex items-center justify-between gap-2">
                             <div class="flex items-center gap-1.5 min-w-0">
@@ -7075,9 +7368,7 @@
                         </div>
                     </div>
 
-                    <!-- Konten 3 Kolom: Stimulus | Soal & Jawaban | Penjelajah Soal -->
                     <div class="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-12 overflow-y-auto lg:overflow-hidden custom-scrollbar bg-white">
-                        <!-- KOLOM KIRI: PANEL STIMULUS & INFORMASI (Tetap Terlihat di HP jika ada stimulus) -->
                         <section class="lg:col-span-5 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 ${(!hasStimulusText && !hasStimulusImg) ? 'hidden lg:flex' : 'flex'} flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
                             <div class="px-4 sm:px-5 py-3 border-b border-slate-100 shrink-0 flex items-center justify-between gap-2">
                                 <h3 class="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
@@ -7106,7 +7397,6 @@
                             </div>
                         </section>
 
-                        <!-- KOLOM TENGAH: PERTANYAAN & PILIHAN JAWABAN -->
                         <section class="lg:col-span-5 bg-slate-50/40 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
                             <div class="px-5 py-3.5 border-b border-slate-100 bg-white flex flex-wrap items-center justify-between gap-2 shrink-0">
                                 <div class="flex items-center gap-2">
@@ -7151,7 +7441,6 @@
                             </div>
                         </section>
 
-                        <!-- KOLOM KANAN: PENJELAJAH SOAL -->
                         <aside class="lg:col-span-2 bg-white flex flex-col justify-between shrink-0 lg:shrink lg:h-full lg:min-h-0 lg:overflow-hidden">
                             <div class="p-4 flex-1 lg:overflow-y-auto custom-scrollbar space-y-3">
                                 <div class="pb-2.5 border-b border-slate-100">
@@ -7185,7 +7474,6 @@
                 </div>
             `;
 
-            // Pastikan tombol nomor soal aktif pada strip HP selalu terlihat di tengah layar
             setTimeout(() => {
                 const activeBtn = document.getElementById('mobileActiveQBtn');
                 if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
@@ -7474,13 +7762,18 @@
             }
         };
 
-        window.openSavedExamResultReview = function(resultId) {
-            const resObj = appData.examResults.find(r => (r.resultId || r.id) === resultId);
+        window.openSavedExamResultReview = async function(resultId) {
+            let resObj = appData.examResults.find(r => (r.resultId || r.id) === resultId);
             if (!resObj) {
                 window.showModal('Data Hasil Tidak Ditemukan', 'Rekap hasil ujian belum tersedia.', 'error');
                 return;
             }
-            window.renderExamResultReviewPage(resObj);
+            const ex = appData.exams.find(e => e.id === resObj.examId);
+            let qList = getQuestionsForExamAnalysis(resObj.examId);
+            if (qList.length === 0 && ex) {
+                qList = await loadScopedQuestionsForExam(ex, false);
+            }
+            window.renderExamResultReviewPage(resObj, qList);
         };
 
         window.renderExamResultReviewPage = function(resObj, questionsOverride = null) {
@@ -7583,6 +7876,10 @@
                         window.clearStaffSession();
                         return false;
                     }
+                    // Jika sesi Admin/Guru valid, baru muat seluruh tabel manajemen
+                    await fetchAllCollectionsFromSupabase();
+                    setupAdminRealtimeSubscriptions();
+
                     const savedStaff = window.getSavedStaffSession();
                     const authEmail = String(session.user.email || '').toLowerCase();
                     const matchedTeacher = (appData.teachers || []).find(t =>
@@ -7613,7 +7910,6 @@
                 if (!restored) {
                     window.renderLoginView();
                 }
-                // Penarikan otomatis berkala sesi kadaluarsa ke Admin setiap 20 detik
                 setInterval(() => {
                     if (window.isStaffUser(appData.currentUser) && !document.hidden && !isBulkOperationInProgress) {
                         const prevCount = appData.examResults.length;
